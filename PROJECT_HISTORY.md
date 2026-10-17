@@ -2,6 +2,7 @@
 
 ## 2026-10-17
 
+- User confirmed animated GIF playback from the Android app on the SpotLED, validating the v0.12.0/v0.12.1 GIF path physically.
 - Added an About SpotLED Companion button/dialog with matching DuvTheDove, Bug-Mag.net, clavo, and OpenAI Codex attributions. Bumped Android to v0.12.1 (versionCode 13), passed all 15 Android unit tests, built and signature-verified the renamed `SpotLED-Companion.apk`; SHA-256 `0ac97adc276683f0cd8f553bf0b11771b923da20368f4bb107afbe9bdf6a8af1`. The Pixel ADB connection became authorized after the build; v0.12.1 was installed/launched. The initial visual check was pending at this point; it is recorded in the following entry.
 - User confirmed the About panel and attributions on the Android phone. GitHub release v0.12.1 is published (not a draft or prerelease) with `SpotLED-Companion.apk`.
 - At the user's request, rewrote the four-commit Git history to remove local broker/topic values, display and BLE identifiers, ADB serial, local paths, and the captured weather reading. Force-pushed the sanitized `main` branch and retargeted `v0.12.0`; verified the release APK asset and SHA-256 remained unchanged. Then changed `plughie/SpotLED-Suite` from private to public.

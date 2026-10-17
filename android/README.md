@@ -31,7 +31,7 @@ For this contributor-test build, `release` uses the local Android debug signing 
 - The debug app builds and is installed/launched on the Pixel 6a.
 - User has validated Nearby Devices permission, BLE discovery/connection, text, a 0° full-screen image, and a 90° image using `stretch` on the Pixel 6a. 180°/270° and other fit-mode combinations remain unverified.
 - The API 33+ image chooser uses the system Photo Picker and returns the selected image URI to SPOTLED; user validation of the chooser flow remains pending.
-- Animated GIF selection is now decoded into two sampled frames; preview intentionally shows the first frame only. The shared frame interval is clamped to 250–1,000 ms to avoid rapid flashing. Android GIF animation still needs user validation on a SpotLED; the separate Python GIF path is physically confirmed.
+- Animated GIF selection is decoded into two sampled frames; preview intentionally shows the first frame only. The shared frame interval is clamped to 250–1,000 ms to avoid rapid flashing. User has physically confirmed Android GIF animation on a SpotLED; rendering is simplified by two-frame sampling and the panel's 64×16 resolution.
 - Signed v0.12.0 is installed/launched on the Pixel 6a for validation; no LED content was sent during the build/install.
 - Text effects encode the Android reference IDs 0–7 in the animation `SpecialEffectsObject`; physical effect behavior from the RGB-raster text path is not yet confirmed.
 - None is currently unavailable: omitting the effect object was observed to trigger a flashing loading icon, so the implementation was removed from the UI and sender.

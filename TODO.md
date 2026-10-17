@@ -13,7 +13,7 @@
 
 ## P1 — Validate Android animated GIF transfer
 
-- [ ] Install the updated APK and send `gators.gif` from the Photo Picker to a SpotLED; confirm visible motion and no loading/error pattern. (Python path is physically validated; Android remains pending.)
+- [x] Install the updated APK and send an animated GIF from the Photo Picker to a SpotLED; user confirmed Android GIF animation.
 - [ ] Confirm frame pacing is comfortable (minimum 250 ms/frame) and that rotation/fit controls affect both sampled frames consistently.
 - [ ] Decide whether GIF preview should remain first-frame-only or gain a play/animation preview.
 
