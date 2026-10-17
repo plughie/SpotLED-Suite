@@ -91,6 +91,7 @@
 - [x] Add tested row-major rotation plus `contain`, `cover`, and `stretch` choices; retry Android writes only when GATT explicitly reports status 201 (busy).
 - [x] Build and install/launch the debug app on the selected Pixel 6a (`[ADB-device-serial]`).
 - [x] Build and verify a signed internal-sideload release APK for contributor review; it uses the local debug signer, not a production key.
+- [x] Create private GitHub repository `plughie/SpotLED-Suite`, push the initial project commit, and publish the signed v0.12.0 `SpotLED-Companion.apk` release asset.
 - [ ] Create/back up an owner-controlled release signing key before public distribution or handing off compatible app updates.
 - [x] User grants Nearby Devices permission and validates SpotLED BLE discovery/GATT connection in the Android app.
 - [x] User confirms Android text and 0° full-screen image work; 90° image works with `stretch` after GATT busy-write handling.
