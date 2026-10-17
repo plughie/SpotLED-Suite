@@ -71,8 +71,8 @@ interactive Python could reach the broker. Its failed plist was removed rather
 than left as a broken auto-start entry. A proper auto-start setup still needs a
 macOS app/permission wrapper or a different service host/manager. The current
 process stops when its host session is ended; the user has physically confirmed
-AWTRIX notification rendering and left-scroll behavior. The first full
-15-minute refresh cycle still needs validation.
+AWTRIX notification rendering, left-scroll behavior, and a temperature refresh
+after 15 minutes.
 
 ## Tests
 

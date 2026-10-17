@@ -6,7 +6,7 @@
 - [x] Confirm this host can discover `SpotLED_AB12`; start the service and complete the retained `[weather-summary]` weather text transfer.
 - [x] Receive an `<awtrix-prefix>/cmd/notify` payload, transfer it, and return to the cached weather reading after its duration; user physically confirmed notification behavior.
 - [x] Confirm the user-preferred explicit Scroll-left effect displays as scrolling on the SpotLED.
-- [ ] Observe at least one complete 15-minute weather refresh interval.
+- [x] User confirmed the temperature refreshed after 15 minutes.
 - [ ] Resolve macOS LaunchAgent local-network access or select another service manager/host. Current service is running in the active host session but is not configured to auto-start after logout/reboot.
 - [ ] Decide whether unsupported AWTRIX icon/sound behavior needs an alternate SpotLED approximation.
 
