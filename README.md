@@ -2,6 +2,8 @@
 
 SpotLED Suite combines the Python BLE reference sender, an Android companion app, and the SpotLED-MQTT notification/weather bridge. It supports text and image transfers, rotation, and slow GIF animation to SpotLED displays. An iPhone app remains a longer-term goal.
 
+SpotLED Suite is a [Bug-Mag.net](https://bug-mag.net) project by **DuvTheDove**, with contributions from **clavo** and **OpenAI Codex**.
+
 ## Current work state
 
 - BLE discovery matches the `SpotLED_*` advertised-name prefix; set `--device-name` when targeting one specific nearby display.
