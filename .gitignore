@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+SpotLED-MQTT/.venv/
+*.log
+
+# macOS
+.DS_Store
+
+# Android/Gradle local and generated files
+android/.gradle/
+android/local.properties
+android/**/build/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Local decompilation of the proprietary SpotLED app is reference-only and is
+# not redistributed with this project.
+SPOTLED_1.9.4_APKPure.xapk_Decompiler.com/

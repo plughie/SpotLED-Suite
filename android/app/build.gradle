@@ -1,0 +1,36 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.spotled.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.spotled.app'
+        minSdk 26
+        targetSdk 35
+        versionCode 12
+        versionName '0.12.0'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            // Internal sideloading only. Use the same local debug identity so
+            // this APK can update the Pixel's installed prototype. Replace
+            // with a securely managed release key before public distribution.
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+        }
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
