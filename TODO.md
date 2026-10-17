@@ -94,6 +94,7 @@
 - [x] Build and verify a signed internal-sideload release APK for contributor review; it uses the local debug signer, not a production key.
 - [x] Create `plughie/SpotLED-Suite`, push the project and signed v0.12.0 `SpotLED-Companion.apk` release, scrub installation-specific values from history, and make the repository public.
 - [x] Add the project attributions to the Android About panel and publish the updated v0.12.1 companion APK.
+- [x] User confirms the About panel and attributions on the Android phone.
 - [ ] Create/back up an owner-controlled release signing key before public distribution or handing off compatible app updates.
 - [x] User grants Nearby Devices permission and validates SpotLED BLE discovery/GATT connection in the Android app.
 - [x] User confirms Android text and 0° full-screen image work; 90° image works with `stretch` after GATT busy-write handling.

@@ -27,7 +27,7 @@ For this contributor-test build, `release` uses the local Android debug signing 
 ## Current validation
 
 - All 15 local JVM protocol/transform/font tests pass, covering one- and two-frame packet structure, receive-capacity fit, rotation/fit, effect IDs, color palette, bounded connection retry, and B glyph parity with Python.
-- The About SpotLED Companion dialog includes the project attributions; it is included in signed v0.12.1.
+- User confirmed the About SpotLED Companion dialog and project attributions on the Android phone; this is included in signed v0.12.1.
 - The debug app builds and is installed/launched on the Pixel 6a.
 - User has validated Nearby Devices permission, BLE discovery/connection, text, a 0° full-screen image, and a 90° image using `stretch` on the Pixel 6a. 180°/270° and other fit-mode combinations remain unverified.
 - The API 33+ image chooser uses the system Photo Picker and returns the selected image URI to SPOTLED; user validation of the chooser flow remains pending.
