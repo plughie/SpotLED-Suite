@@ -8,7 +8,7 @@
 - [x] Confirm the user-preferred explicit Scroll-left effect displays as scrolling on the SpotLED.
 - [x] User confirmed the temperature refreshed after 15 minutes.
 - [x] Scrub machine-specific broker/topic/device/readout values from GitHub-facing documentation and require MQTT/device settings through environment variables.
-- [ ] Resolve macOS LaunchAgent local-network access or select another service manager/host. Current service is running in the active host session but is not configured to auto-start after logout/reboot.
+- [x] Keep SpotLED-MQTT manually started to avoid contention with the companion app; do not configure auto-start.
 - [ ] Decide whether unsupported AWTRIX icon/sound behavior needs an alternate SpotLED approximation.
 
 ## P1 — Validate Android animated GIF transfer
