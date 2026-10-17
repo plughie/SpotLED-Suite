@@ -4,6 +4,9 @@
 notification topic and Home Assistant's retained weather topic, then sends
 content to a nearby SpotLED over BLE using the tested parent-project sender.
 
+SpotLED Suite is a [Bug-Mag.net](https://bug-mag.net) project by **DuvTheDove**,
+with contributions from **clavo** and **OpenAI Codex**.
+
 - `MQTT_NOTIFY_TOPIC` (required): set this to the AWTRIX notification topic,
   commonly `<awtrix-prefix>/cmd/notify`. It reads notification `text`, `textColor`,
   `durationMs`, `stack`, and `hold`. Stacked notifications queue, `stack:false`

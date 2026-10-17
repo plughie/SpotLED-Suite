@@ -1,6 +1,6 @@
 # SPOTLED Android prototype
 
-Native Java Android app prototype. It provides text/image input using the same independent 3×5 ASCII raster font as the Python reference, solid text colors and a static rainbow gradient, system Photo Picker on API 33+, 0°/90°/180°/270° rotation, a 64×16 preview, `contain`/`cover`/`stretch` fit choices, the eight APK-verified text effects, BLE discovery for any `SpotLED_*` name with a chooser shortly after the first match, one bounded fresh-GATT retry after connection failure, and acknowledged 24-bit RGB frame transfer. Animated GIFs are sampled to two frames, transformed with the same rotation/fit controls, and sent at a shared 250–1,000 ms interval; the device's 7,280-byte receive limit prevents sending more than two full-color 64×16 frames. Device selection stores the target without opening GATT; each send connects and disconnects afterward. If no scan result appears, scanning continues in 3-second intervals for up to 15 seconds. There is no None option until a safe firmware representation is verified.
+Native Java Android app prototype. It provides text/image input using the same independent 3×5 ASCII raster font as the Python reference, solid text colors and a static rainbow gradient, system Photo Picker on API 33+, 0°/90°/180°/270° rotation, a 64×16 preview, `contain`/`cover`/`stretch` fit choices, the eight APK-verified text effects, BLE discovery for any `SpotLED_*` name with a chooser shortly after the first match, one bounded fresh-GATT retry after connection failure, and acknowledged 24-bit RGB frame transfer. Animated GIFs are sampled to two frames, transformed with the same rotation/fit controls, and sent at a shared 250–1,000 ms interval; the device's 7,280-byte receive limit prevents sending more than two full-color 64×16 frames. The About dialog credits DuvTheDove, Bug-Mag.net, clavo, and OpenAI Codex. Device selection stores the target without opening GATT; each send connects and disconnects afterward. If no scan result appears, scanning continues in 3-second intervals for up to 15 seconds. There is no None option until a safe firmware representation is verified.
 
 ## Build and test
 
@@ -20,13 +20,14 @@ Build the signed internal-sideload variant with:
 ./gradlew testReleaseUnitTest assembleRelease
 ```
 
-Release asset: [SpotLED-Companion.apk](https://github.com/plughie/SpotLED-Suite/releases/download/v0.12.0/SpotLED-Companion.apk) (version `0.12.0`, package `com.spotled.app`). Signature verified with `apksigner`; SHA-256: `77f9c2910f99643106372f439e792ddc83bb857e09e96c136495246305803aee`.
+Release asset: [SpotLED-Companion.apk](https://github.com/plughie/SpotLED-Suite/releases/download/v0.12.1/SpotLED-Companion.apk) (version `0.12.1`, package `com.spotled.app`). Signature verified with `apksigner`; SHA-256: `0ac97adc276683f0cd8f553bf0b11771b923da20368f4bb107afbe9bdf6a8af1`.
 
 For this contributor-test build, `release` uses the local Android debug signing identity so the APK can update the currently installed prototype. The APK is signed and sideloadable, but this is **not a production release key**. No private signing key or password is in the project. To distribute future compatible updates or publish publicly, create and securely back up an owner-controlled release key, then use that same key for every update. The collaborator can install this APK fresh; an existing app signed by a different key cannot be updated in place.
 
 ## Current validation
 
 - All 15 local JVM protocol/transform/font tests pass, covering one- and two-frame packet structure, receive-capacity fit, rotation/fit, effect IDs, color palette, bounded connection retry, and B glyph parity with Python.
+- The About SpotLED Companion dialog includes the project attributions; it is included in signed v0.12.1.
 - The debug app builds and is installed/launched on the Pixel 6a.
 - User has validated Nearby Devices permission, BLE discovery/connection, text, a 0° full-screen image, and a 90° image using `stretch` on the Pixel 6a. 180°/270° and other fit-mode combinations remain unverified.
 - The API 33+ image chooser uses the system Photo Picker and returns the selected image URI to SPOTLED; user validation of the chooser flow remains pending.

@@ -151,7 +151,21 @@ public final class MainActivity extends Activity {
         note.setTextSize(13);
         note.setPadding(0, dp(12), 0, 0);
         page.addView(note);
+
+        Button about = new Button(this);
+        about.setText("About SpotLED Companion");
+        about.setOnClickListener(view -> showAboutDialog());
+        page.addView(about);
         setContentView(scroll);
+    }
+
+    private void showAboutDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("About SpotLED Companion")
+                .setMessage("SpotLED Suite is a Bug-Mag.net project by DuvTheDove, "
+                        + "with contributions from clavo and OpenAI Codex.")
+                .setPositiveButton("Close", (dialog, which) -> dialog.dismiss())
+                .show();
     }
 
     private void requestBluetoothPermissionsThenScan() {
