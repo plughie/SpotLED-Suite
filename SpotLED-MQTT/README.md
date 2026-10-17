@@ -4,19 +4,22 @@
 notification topic and Home Assistant's retained weather topic, then sends
 content to a nearby SpotLED over BLE using the tested parent-project sender.
 
-- `<awtrix-prefix>/cmd/notify` (configurable): reads notification `text`, `textColor`,
+- `MQTT_NOTIFY_TOPIC` (required): set this to the AWTRIX notification topic,
+  commonly `<awtrix-prefix>/cmd/notify`. It reads notification `text`, `textColor`,
   `durationMs`, `stack`, and `hold`. Stacked notifications queue, `stack:false`
   replaces the active notification, and the weather screen returns after an
   alert expires or is dismissed.
-- `<weather-state-topic>` (configurable): reads Fahrenheit `temp`
+- `MQTT_WEATHER_TOPIC` (required): set this to a retained Home Assistant weather
+  topic. It reads Fahrenheit `temp`
   and Home Assistant `cond`. The retained value is shown at startup and refreshed
   every 15 minutes; MQTT weather changes update the cached value for the next
   refresh. The temperature color ramp and condition names follow `Wetter.ax`.
 - Text uses the explicit `left` marquee effect by default; set
   `SPOTLED_TEXT_EFFECT` to `slide`, `up`, `down`, `left`, `right`, `snow`,
   `scroll`, or `laser` to select another tested protocol effect.
-- Default display is `SpotLED_AB12`; change `SPOTLED_DEVICE_NAME` for another
-  nearby `SpotLED_*` unit.
+- `SPOTLED_DEVICE_NAME` (required): use the exact advertised name shown during
+  display startup: `SpotLED_` followed by the four-character hexadecimal ID,
+  for example `SpotLED_AB12`.
 
 SpotLED is a text-oriented 64×16 display and does not implement AWTRIX icon or
 sound assets. This bridge therefore renders notification text and its color,
@@ -31,13 +34,17 @@ Use a Python 3 environment on a host that has both MQTT network access and BLE
 radio range to the SpotLED:
 
 ```sh
+git clone https://github.com/plughie/SpotLED-Suite.git
+cd SpotLED-Suite/SpotLED-MQTT
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-Configure the broker and topics through environment variables (never put broker
-passwords in source control):
+Replace the placeholder values with your broker address, MQTT topics, and BLE
+advertised display name. The service requires these settings and does not
+contain installation-specific defaults. Never put broker passwords in source
+control.
 
 ```sh
 export MQTT_HOST="your-broker-host"
@@ -58,21 +65,12 @@ default, matching the Home Assistant automation. Logs go to stdout/stderr for
 service-manager capture. BLE opens only while sending and closes after each
 transfer.
 
-Current host configuration uses the anonymous broker at `<broker-address>:1883`
-and `SpotLED_AB12`; no broker credentials are stored in this app. The retained
-weather payload was received and its `[weather-summary]` text transfer completed. One
-AWTRIX notification was also received and transferred, after which the service
-restored the weather reading. Default text effect is now explicit left-scroll
-(protocol effect ID 3), rather than generic Scroll (ID 6).
-
-The service is running in the active host session. A user LaunchAgent was
-attempted, but macOS denied that background process local-LAN access even though
-interactive Python could reach the broker. Its failed plist was removed rather
-than left as a broken auto-start entry. A proper auto-start setup still needs a
-macOS app/permission wrapper or a different service host/manager. The current
-process stops when its host session is ended; the user has physically confirmed
-AWTRIX notification rendering, left-scroll behavior, and a temperature refresh
-after 15 minutes.
+No machine-specific broker address, MQTT topic, display identifier, or weather
+reading is included in this guide. The service has been validated for MQTT
+notifications, left-scroll behavior, and 15-minute weather refreshes. Start it
+manually when the display should be reserved for MQTT; stop it with Ctrl-C
+before using the companion app. Automatic startup is intentionally not
+configured, avoiding display contention and host-specific network permissions.
 
 ## Tests
 

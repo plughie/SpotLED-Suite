@@ -48,7 +48,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         ]
         advertisements = {
             device.address: (device, SimpleNamespace(local_name=name))
-            for device, name in zip(devices, ("SpotLED_AB12", "SpotLED_CD34"))
+            for device, name in zip(devices, ("SpotLED_Example", "SpotLED_Other"))
         }
         with patch.object(spotled.BleakScanner, "discover",
                           new=AsyncMock(return_value=advertisements)), \

@@ -2,11 +2,12 @@
 
 ## P1 — Configure and validate SpotLED-MQTT
 
-- [x] Configure broker `<broker-address>:1883` with anonymous access and confirm its retained `<weather-state-topic>` payload is reachable from this Mac.
-- [x] Confirm this host can discover `SpotLED_AB12`; start the service and complete the retained `[weather-summary]` weather text transfer.
-- [x] Receive an `<awtrix-prefix>/cmd/notify` payload, transfer it, and return to the cached weather reading after its duration; user physically confirmed notification behavior.
+- [x] Configure an anonymous MQTT broker and confirm the configured retained weather topic is reachable from the service host.
+- [x] Confirm the service host can discover a `SpotLED_*` display and send the current weather reading.
+- [x] Receive an AWTRIX notification payload, transfer it, and return to the cached weather reading after its duration; user physically confirmed notification behavior.
 - [x] Confirm the user-preferred explicit Scroll-left effect displays as scrolling on the SpotLED.
 - [x] User confirmed the temperature refreshed after 15 minutes.
+- [x] Scrub machine-specific broker/topic/device/readout values from GitHub-facing documentation and require MQTT/device settings through environment variables.
 - [ ] Resolve macOS LaunchAgent local-network access or select another service manager/host. Current service is running in the active host session but is not configured to auto-start after logout/reboot.
 - [ ] Decide whether unsupported AWTRIX icon/sound behavior needs an alternate SpotLED approximation.
 
@@ -89,7 +90,7 @@
 - [x] Create the Android project and first vertical slice: text/image input, rotation, preview, BLE discovery/connection, and single-frame RGB transfer.
 - [x] Port the RGB frame-animation wrapper and start/end notification packets; verify builders with Android JVM tests against the Python reference vectors.
 - [x] Add tested row-major rotation plus `contain`, `cover`, and `stretch` choices; retry Android writes only when GATT explicitly reports status 201 (busy).
-- [x] Build and install/launch the debug app on the selected Pixel 6a (`[ADB-device-serial]`).
+- [x] Build and install/launch the debug app on the selected Pixel 6a.
 - [x] Build and verify a signed internal-sideload release APK for contributor review; it uses the local debug signer, not a production key.
 - [x] Create private GitHub repository `plughie/SpotLED-Suite`, push the initial project commit, and publish the signed v0.12.0 `SpotLED-Companion.apk` release asset.
 - [ ] Create/back up an owner-controlled release signing key before public distribution or handing off compatible app updates.

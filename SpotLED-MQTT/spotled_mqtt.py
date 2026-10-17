@@ -22,8 +22,6 @@ except ImportError:  # Keep pure parsing helpers importable for tests.
     mqtt = None
 
 LOG = logging.getLogger("spotled_mqtt")
-WEATHER_TOPIC_DEFAULT = "<weather-state-topic>"
-NOTIFY_TOPIC_DEFAULT = "<awtrix-prefix>/cmd/notify"
 DISMISS = object()
 WEATHER_REFRESH = object()
 
@@ -199,9 +197,9 @@ class SpotLedMqttService:
         self.username = os.environ.get("MQTT_USERNAME", "")
         self.password = os.environ.get("MQTT_PASSWORD", "")
         self.client_id = os.environ.get("MQTT_CLIENT_ID", "spotled-mqtt")
-        self.notify_topic = os.environ.get("MQTT_NOTIFY_TOPIC", NOTIFY_TOPIC_DEFAULT)
-        self.weather_topic = os.environ.get("MQTT_WEATHER_TOPIC", WEATHER_TOPIC_DEFAULT)
-        self.device_name = os.environ.get("SPOTLED_DEVICE_NAME", "SpotLED_AB12")
+        self.notify_topic = os.environ.get("MQTT_NOTIFY_TOPIC", "").strip()
+        self.weather_topic = os.environ.get("MQTT_WEATHER_TOPIC", "").strip()
+        self.device_name = os.environ.get("SPOTLED_DEVICE_NAME", "").strip()
         self.weather_interval = max(60, int(os.environ.get("WEATHER_INTERVAL_SECONDS", "900")))
         self.weather_unit = os.environ.get("WEATHER_UNIT", "F").upper()
         if self.weather_unit not in {"F", "C"}:
@@ -337,6 +335,12 @@ class SpotLedMqttService:
     async def run(self) -> None:
         if not self.host:
             raise RuntimeError("Set MQTT_HOST to the address of your MQTT broker")
+        if not self.notify_topic:
+            raise RuntimeError("Set MQTT_NOTIFY_TOPIC to your AWTRIX notification command topic")
+        if not self.weather_topic:
+            raise RuntimeError("Set MQTT_WEATHER_TOPIC to your Home Assistant weather state topic")
+        if not self.device_name:
+            raise RuntimeError("Set SPOTLED_DEVICE_NAME to the display's advertised name")
         if mqtt is None:
             raise RuntimeError("Missing paho-mqtt; install the SpotLED-MQTT requirements.txt")
         self.loop = asyncio.get_running_loop()

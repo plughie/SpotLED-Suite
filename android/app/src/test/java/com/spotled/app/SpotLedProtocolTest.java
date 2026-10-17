@@ -10,7 +10,7 @@ import org.junit.Test;
 
 public class SpotLedProtocolTest {
     @Test public void matchesSpotLedNamePrefixAndRejectsUnrelatedDevices() {
-        assertTrue(SpotLedBleClient.matchesSpotLedName("SpotLED_AB12"));
+        assertTrue(SpotLedBleClient.matchesSpotLedName("SpotLED_Example"));
         assertTrue(SpotLedBleClient.matchesSpotLedName("SpotLED_OriginalContributor"));
         assertFalse(SpotLedBleClient.matchesSpotLedName("AnotherLED_451D"));
         assertFalse(SpotLedBleClient.matchesSpotLedName(null));

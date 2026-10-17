@@ -10,7 +10,7 @@ Use JDK 17 and an Android SDK with platform 35 installed:
 JAVA_HOME=/path/to/jdk-17 ANDROID_HOME=/path/to/android-sdk ./gradlew testDebugUnitTest assembleDebug
 ```
 
-The local Pixel 6a test target is serial `[ADB-device-serial]`; always select it explicitly when using ADB because another device may also be connected. The debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
+When using ADB with multiple devices connected, select the intended Android test device explicitly. The debug APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Signed APK for internal sharing
 
