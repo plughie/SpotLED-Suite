@@ -7,6 +7,7 @@ final class SpotLedProtocol {
     static final int SET_DATA_OBJECT = 0x8004;
     static final int SCREEN_WIDTH = 64;
     static final int SCREEN_HEIGHT = 16;
+    static final int MAX_RECEIVE_BYTES = 7280;
 
     private SpotLedProtocol() {}
 
@@ -60,6 +61,83 @@ final class SpotLedProtocol {
         return wrapSetData(animation, 1);
     }
 
+    static boolean isNativeTextEffect(int effectMode) {
+        return effectMode >= 0 && effectMode <= 7;
+    }
+
+    /** Native firmware text transfers: WordStock font followed by CharacterString. */
+    static byte[][] buildNativeTextTransfers(String text, int paletteIndex, int effectMode) {
+        if (text == null || text.isEmpty()) throw new IllegalArgumentException("Text must not be empty");
+        if (text.length() > 160) throw new IllegalArgumentException("Text exceeds the 160-character device limit");
+        if (!isNativeTextEffect(effectMode)) throw new IllegalArgumentException("Unknown native text effect");
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (Character.isSurrogate(ch))
+                throw new IllegalArgumentException("Native marquee text supports BMP characters only");
+        }
+
+        ByteArrayOutputStream fonts = new ByteArrayOutputStream();
+        // Match the Python sender's WordStock semantics: one font entry per character,
+        // in the same order as CharacterString, including repeated characters.
+        for (int i = 0; i < text.length(); i++) fonts.writeBytes(fontObject(text.charAt(i)));
+        byte[] wordStock = objectWithFollow(5,
+                new byte[] {(byte) (text.length() >> 8), (byte) text.length()}, fonts.toByteArray());
+
+        ByteArrayOutputStream content = new ByteArrayOutputStream();
+        putU16(content, text.length());
+        content.write(1);
+        ByteArrayOutputStream follow = new ByteArrayOutputStream();
+        int[] codePoints = text.codePoints().toArray();
+        for (int index = 0; index < codePoints.length; index++) {
+            int color = TextPalette.colorFor(paletteIndex, index, codePoints.length);
+            follow.writeBytes(object(2, new byte[] {(byte) (color >> 16), (byte) (color >> 8), (byte) color}));
+            int cp = codePoints[index];
+            follow.writeBytes(object(3, new byte[] {(byte) (cp >> 8), (byte) cp}));
+        }
+        follow.writeBytes(object(7, new byte[] {0, 0, (byte) 200}));
+        follow.writeBytes(object(8, new byte[] {(byte) effectMode}));
+        byte[] characterString = objectWithFollow(4, content.toByteArray(), follow.toByteArray());
+
+        byte[] fontPayload = wrapSetData(wordStock, 1);
+        byte[] textPayload = wrapSetData(characterString, 2);
+        if (fontPayload.length > MAX_RECEIVE_BYTES || textPayload.length > MAX_RECEIVE_BYTES)
+            throw new IllegalArgumentException("Native text exceeds the display's 7,280-byte transfer limit");
+        return new byte[][] {fontPayload, textPayload};
+    }
+
+    private static byte[] fontObject(char ch) {
+        byte[] captured = CapturedPanelGlyphs.fontObject(ch);
+        if (captured != null) return captured;
+        String[] rows = CompactTextRaster.rowsFor(ch);
+        byte[] content = new byte[40];
+        content[0] = 1; // flag
+        content[1] = 0;
+        content[2] = 16; // glyph width
+        content[3] = 0;
+        content[4] = 16; // glyph height
+        content[5] = (byte) (ch >> 8);
+        content[6] = (byte) ch;
+        content[7] = 0x20; // x offset used by the Python reference
+        for (int y = 0; y < 5; y++) {
+            for (int x = 0; x < 3; x++) {
+                if (rows[y].charAt(x) != '1') continue;
+                // Scale each compact pixel into a 4x2 block inside the 16x16 glyph.
+                int px = 2 + x * 4;
+                int py = 3 + y * 2;
+                for (int yy = py; yy < py + 2; yy++) {
+                    int rowOffset = 8 + yy * 2;
+                    int bits = ((content[rowOffset] & 0xff) << 8) | (content[rowOffset + 1] & 0xff);
+                    for (int xx = px; xx < px + 4; xx++) bits |= 0x8000 >>> xx;
+                    content[rowOffset] = (byte) (bits >> 8);
+                    content[rowOffset + 1] = (byte) bits;
+                }
+            }
+        }
+        return object(13, content);
+    }
+
+    static byte[] nativeFontObject(char ch) { return fontObject(ch); }
+
     static byte[] buildStart(int serial, int commandId, int totalLength) {
         byte[] packet = new byte[10];
         packet[0] = 10;
@@ -73,6 +151,24 @@ final class SpotLedProtocol {
     static byte[] buildEnd(int serial, int commandId, int totalLength) {
         byte[] packet = buildStart(serial, commandId, totalLength);
         packet[1] = 3;
+        return packet;
+    }
+
+    static byte[] buildNativeTextSetupPlaylist() {
+        return buildCommandData(0x800c, new byte[9], 1);
+    }
+
+    static byte[] buildNativeTextSetupPixelMap() {
+        return buildCommandData(0x8000, new byte[] {0, 0x10}, 3);
+    }
+
+    private static byte[] buildCommandData(int commandId, byte[] content, int serial) {
+        byte[] packet = new byte[content.length + 11];
+        putU32(packet, 0, packet.length);
+        putU16(packet, 4, commandId);
+        putU32(packet, 6, serial);
+        System.arraycopy(content, 0, packet, 10, content.length);
+        packet[packet.length - 1] = (byte) checksum(packet, packet.length - 1);
         return packet;
     }
 
@@ -132,15 +228,16 @@ final class SpotLedProtocol {
         out.write(value & 0xff);
     }
 
-    private static void putU16(byte[] out, int offset, int value) {
-        out[offset] = (byte) (value >> 8);
-        out[offset + 1] = (byte) value;
-    }
-
     private static void putU32(byte[] out, int offset, int value) {
         out[offset] = (byte) (value >> 24);
         out[offset + 1] = (byte) (value >> 16);
         out[offset + 2] = (byte) (value >> 8);
         out[offset + 3] = (byte) value;
     }
+
+    private static void putU16(byte[] out, int offset, int value) {
+        out[offset] = (byte) (value >> 8);
+        out[offset + 1] = (byte) value;
+    }
+
 }

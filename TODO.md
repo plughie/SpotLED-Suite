@@ -1,5 +1,14 @@
 # Prioritized TODO
 
+## P1 — Validate Android native marquee text
+
+- [x] Route Scroll up/down/left/right and Scroll through native WordStock/CharacterString transfers at 0° so the full message is sent without image-fit cropping.
+- [x] Preserve selected solid/rainbow character colors and add packet, setup-command, and effect-routing tests.
+- [x] Route all 0° text effects through the native text engine and render the same captured 16×16 glyphs in the preview; retain raster text only for rotated output.
+- [x] Install the updated v0.13.0 APK on the Pixel 6a.
+- [x] User confirmed `WWW.HYBRID.NET` with Scroll left behaves as expected, including improved W/N glyphs.
+- [ ] Decide whether to add native font overrides for unsupported/non-ASCII characters after validating the standard ASCII marquee path.
+
 ## P1 — Configure and validate SpotLED-MQTT
 
 - [x] Configure an anonymous MQTT broker and confirm the configured retained weather topic is reachable from the service host.

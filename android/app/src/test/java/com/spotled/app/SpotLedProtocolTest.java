@@ -30,6 +30,62 @@ public class SpotLedProtocolTest {
         assertTrue(TextPalette.colorFor(8, 1, 4) != TextPalette.colorFor(8, 2, 4));
     }
 
+    @Test public void allEightSupportedEffectsUseNativeTextAndUnknownEffectIsRejected() {
+        for (int effect = 0; effect <= 7; effect++)
+            assertTrue(SpotLedProtocol.isNativeTextEffect(effect));
+        assertFalse(SpotLedProtocol.isNativeTextEffect(8));
+    }
+
+    @Test public void nativeMarqueeUsesCapturedPythonGlyphsForWideLetters() {
+        byte[] w = SpotLedProtocol.nativeFontObject('W');
+        byte[] n = SpotLedProtocol.nativeFontObject('N');
+        assertEquals(47, w.length);
+        assertEquals(47, n.length);
+        assertEquals('W', u16(w, 11));
+        assertEquals('N', u16(n, 11));
+        assertEquals(SpotLedProtocol.checksum(w, 46), w[46] & 0xff);
+        assertEquals(SpotLedProtocol.checksum(n, 46), n[46] & 0xff);
+        assertFalse(java.util.Arrays.equals(w, n));
+    }
+
+    @Test public void nativeMarqueeMatchesPerCharacterFontOrderAndColoredCharacterString() {
+        byte[][] transfers = SpotLedProtocol.buildNativeTextTransfers("ABA", 1, 3);
+        byte[] wordStock = transfers[0];
+        byte[] characterString = transfers[1];
+        assertEquals(1, u32(wordStock, 6));
+        assertEquals(5, u16(wordStock, 19));
+        assertEquals(3, u16(wordStock, 21)); // Python sends one FontObject per text character
+        assertEquals(13, u16(wordStock, 28));
+        assertEquals('A', u16(wordStock, 35));
+        assertEquals('B', u16(wordStock, 82));
+        assertEquals('A', u16(wordStock, 129));
+        assertEquals(4, u16(characterString, 19));
+        assertEquals(3, u16(characterString, 21));
+        assertEquals(1, characterString[23] & 0xff);
+        assertEquals(2, u16(characterString, 29));
+        assertEquals(255, characterString[31] & 0xff);
+        assertEquals(0, characterString[32] & 0xff);
+        assertEquals(0, characterString[33] & 0xff);
+        assertEquals(3, u16(characterString, 39));
+        assertEquals('A', u16(characterString, 41));
+        assertEquals(8, u16(characterString, characterString.length - 4));
+        assertEquals(3, characterString[characterString.length - 2] & 0xff);
+        assertEquals(SpotLedProtocol.checksum(wordStock, 14), wordStock[14] & 0xff);
+        assertEquals(SpotLedProtocol.checksum(characterString, 14), characterString[14] & 0xff);
+    }
+
+    @Test public void nativeTextSetupPacketsMatchPythonCommandFraming() {
+        byte[] playlist = SpotLedProtocol.buildNativeTextSetupPlaylist();
+        byte[] pixelMap = SpotLedProtocol.buildNativeTextSetupPixelMap();
+        assertEquals(20, playlist.length);
+        assertEquals(0x800c, u16(playlist, 4));
+        assertEquals(1, u32(playlist, 6));
+        assertEquals(13, pixelMap.length);
+        assertEquals(0x8000, u16(pixelMap, 4));
+        assertEquals(3, u32(pixelMap, 6));
+        assertEquals(0x10, u16(pixelMap, 10));
+    }
+
     @Test public void compactTextBMatchesPythonGlyphAndUsesOnePixelAdvanceGap() {
         assertArrayEquals(new String[] {"110", "101", "110", "101", "110"},
                 CompactTextRaster.rowsFor('B'));

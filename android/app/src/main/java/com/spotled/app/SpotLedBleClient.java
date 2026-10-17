@@ -304,6 +304,38 @@ final class SpotLedBleClient {
         sendRgbAnimation(frames, width, height, intervalMs, 0, true);
     }
 
+    void sendNativeText(String text, int paletteIndex, int effectMode) {
+        FoundDevice target = selectedDevice;
+        if (target == null) {
+            status("Find and select a SpotLED display before sending.");
+            return;
+        }
+        if (!transferInProgress.compareAndSet(false, true)) {
+            status("A transfer is already in progress.");
+            return;
+        }
+        new Thread(() -> {
+            boolean transferAcknowledged = false;
+            try {
+                byte[][] payloads = SpotLedProtocol.buildNativeTextTransfers(text, paletteIndex, effectMode);
+                connectForTransfer(target);
+                writeCommand(SpotLedProtocol.buildNativeTextSetupPlaylist());
+                Thread.sleep(200);
+                writeCommand(SpotLedProtocol.buildNativeTextSetupPixelMap());
+                Thread.sleep(200);
+                for (byte[] payload : payloads) transferPayload(payload);
+                transferAcknowledged = true;
+            } catch (Exception exception) {
+                status("Send failed: " + (exception.getMessage() == null ? exception : exception.getMessage()));
+            } finally {
+                disconnectTransport();
+                transferInProgress.set(false);
+                if (transferAcknowledged)
+                    status("Native text acknowledged; disconnected. Check the display to confirm rendering.");
+            }
+        }, "spotled-text-transfer").start();
+    }
+
     private void sendRgbAnimation(byte[][] frames, int width, int height, int intervalMs,
                                   int effectMode, boolean animatedImage) {
         FoundDevice target = selectedDevice;
@@ -323,20 +355,7 @@ final class SpotLedBleClient {
                 if (payload.length > 7280)
                     throw new IllegalArgumentException("Image animation exceeds the display's 7,280-byte receive limit.");
                 connectForTransfer(target);
-                int serial = nextSerial.getAndUpdate(value -> (value + 1) & 0xffff);
-                responses.clear();
-                writeCommand(SpotLedProtocol.buildStart(serial, SpotLedProtocol.SET_DATA_OBJECT, payload.length));
-                waitForAck(2, serial, 8);
-                int chunkSize = Math.max(20, Math.min(182, mtu - 3));
-                for (int offset = 0; offset < payload.length; offset += chunkSize) {
-                    int count = Math.min(chunkSize, payload.length - offset);
-                    byte[] chunk = new byte[count];
-                    System.arraycopy(payload, offset, chunk, 0, count);
-                    writeNoResponse(dataCharacteristic, chunk);
-                    Thread.sleep(5);
-                }
-                writeCommand(SpotLedProtocol.buildEnd(serial, SpotLedProtocol.SET_DATA_OBJECT, payload.length));
-                waitForAck(4, serial, 12);
+                transferPayload(payload);
                 transferAcknowledged = true;
             } catch (Exception exception) {
                 status("Send failed: " + (exception.getMessage() == null ? exception : exception.getMessage()));
@@ -350,6 +369,23 @@ final class SpotLedBleClient {
                 }
             }
         }, "spotled-transfer").start();
+    }
+
+    private void transferPayload(byte[] payload) throws Exception {
+        int serial = nextSerial.getAndUpdate(value -> (value + 1) & 0xffff);
+        responses.clear();
+        writeCommand(SpotLedProtocol.buildStart(serial, SpotLedProtocol.SET_DATA_OBJECT, payload.length));
+        waitForAck(2, serial, 8);
+        int chunkSize = Math.max(20, Math.min(182, mtu - 3));
+        for (int offset = 0; offset < payload.length; offset += chunkSize) {
+            int count = Math.min(chunkSize, payload.length - offset);
+            byte[] chunk = new byte[count];
+            System.arraycopy(payload, offset, chunk, 0, count);
+            writeNoResponse(dataCharacteristic, chunk);
+            Thread.sleep(5);
+        }
+        writeCommand(SpotLedProtocol.buildEnd(serial, SpotLedProtocol.SET_DATA_OBJECT, payload.length));
+        waitForAck(4, serial, 12);
     }
 
     private void connectForTransfer(FoundDevice target) throws Exception {

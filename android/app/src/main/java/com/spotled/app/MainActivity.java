@@ -208,10 +208,42 @@ public final class MainActivity extends Activity {
             statusView.setText("Enter some text first.");
             return;
         }
+        int effectMode = textEffectSpinner.getSelectedItemPosition();
+        if (rotationSpinner.getSelectedItemPosition() == 0) {
+            preview.setImageBitmap(renderMarqueePreview(message, textColorSpinner.getSelectedItemPosition()));
+            if (ble.hasSelectedDevice()) {
+                statusView.setText("Sending text with the display's native font and "
+                        + textEffectSpinner.getSelectedItem() + " effect.");
+                ble.sendNativeText(message, textColorSpinner.getSelectedItemPosition(), effectMode);
+            } else {
+                statusView.setText("Native-font preview ready. Find and select a display before sending.");
+            }
+            return;
+        }
         RgbTransforms.Frame raster = CompactTextRaster.render(
                 message, textColorSpinner.getSelectedItemPosition());
-        sendRgbContent(raster.rgb, raster.width, raster.height,
-                textEffectSpinner.getSelectedItemPosition());
+        sendRgbContent(raster.rgb, raster.width, raster.height, effectMode);
+    }
+
+    private Bitmap renderMarqueePreview(String text, int paletteIndex) {
+        int[] pixels = new int[SpotLedProtocol.SCREEN_WIDTH * SpotLedProtocol.SCREEN_HEIGHT];
+        int[] codePoints = text.codePoints().toArray();
+        int xStart = 0;
+        for (int index = 0; index < codePoints.length && xStart < SpotLedProtocol.SCREEN_WIDTH; index++) {
+            byte[] glyph = SpotLedProtocol.nativeFontObject((char) codePoints[index]);
+            int color = TextPalette.colorFor(paletteIndex, index, codePoints.length);
+            for (int y = 0; y < 16; y++) {
+                int rowOffset = 14 + y * 2;
+                int bits = ((glyph[rowOffset] & 0xff) << 8) | (glyph[rowOffset + 1] & 0xff);
+                for (int x = 0; x < 16 && xStart + x < SpotLedProtocol.SCREEN_WIDTH; x++) {
+                    if ((bits & (0x8000 >>> x)) != 0)
+                        pixels[y * SpotLedProtocol.SCREEN_WIDTH + xStart + x] = color;
+                }
+            }
+            xStart += 16;
+        }
+        return Bitmap.createBitmap(pixels, SpotLedProtocol.SCREEN_WIDTH,
+                SpotLedProtocol.SCREEN_HEIGHT, Bitmap.Config.ARGB_8888);
     }
 
     private void openImagePicker() {
