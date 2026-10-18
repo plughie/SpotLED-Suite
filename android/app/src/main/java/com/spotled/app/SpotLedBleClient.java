@@ -120,6 +120,22 @@ final class SpotLedBleClient {
     boolean isReady() { return ready; }
     boolean hasSelectedDevice() { return selectedDevice != null; }
 
+    boolean restoreSelectedDevice(String name, String address) {
+        if (!matchesSpotLedName(name) || address == null
+                || !BluetoothAdapter.checkBluetoothAddress(address))
+            return false;
+        BluetoothManager manager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
+        BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
+        if (adapter == null) return false;
+        try {
+            BluetoothDevice device = adapter.getRemoteDevice(address);
+            selectDevice(new FoundDevice(device, name, address));
+            return true;
+        } catch (IllegalArgumentException | SecurityException exception) {
+            return false;
+        }
+    }
+
     static boolean matchesSpotLedName(String name) {
         return name != null && name.startsWith(DEVICE_NAME_PREFIX);
     }
@@ -134,7 +150,6 @@ final class SpotLedBleClient {
             return;
         }
         disconnectTransport();
-        selectedDevice = null;
         BluetoothManager manager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
         BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
         if (adapter == null || !adapter.isEnabled()) {

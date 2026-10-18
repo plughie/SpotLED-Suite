@@ -5,9 +5,12 @@
 - [x] Use the supplied SpotLED artwork as the launcher icon for adaptive and legacy Android launchers.
 - [x] Add persisted System/Light/Dark themes and a gear menu with Settings and About.
 - [x] Add a persisted native/raster text switch; keep native text as the default and require raster for rotation.
+- [x] Remember the last selected Android display without maintaining an idle BLE connection; prompt for discovery when a send has no remembered target.
 - [x] Build and install v0.14.0 on the Pixel 6a; ADB screenshots confirmed the branded title, gear, and dark settings panel.
 - [x] Rename the in-app title to “SPOTLED Companion”.
 - [x] User confirmed the launcher icon, explicit theme choices, raster-mode option, About placement, and branded app title on the Pixel 6a.
+- [x] Persist the last selected Android display; if none is remembered, prompt to scan and continue the pending send after selection without holding an idle BLE connection.
+- [x] User verified on the Pixel that the display is remembered across app restarts and that sends with no remembered display prompt for discovery; tested with both text and images.
 - [x] Add Slow/Normal/Fast native-text timing and encode the selected 100/200/300 ms value in CharacterString.
 - [x] Stop SpotLED-MQTT and send `WWW.HYBRID.NET` / Scroll left with Slow (300 ms); BLE transfer was acknowledged.
 - [x] User confirmed the Slow (300 ms) setting makes the message move slowly.
@@ -43,7 +46,7 @@
 - [x] Install the updated APK and send an animated GIF from the Photo Picker to a SpotLED; user confirmed Android GIF animation.
 - [x] User confirmed Android GIF handling works the same as the CLI, including its safe pacing and frame transforms.
 - [x] Animate the GIF preview using the same sampled, transformed frames and safe interval as the display transfer.
-- [ ] User visually confirms the animated GIF preview on the Android phone.
+- [x] User confirmed the animated GIF preview works on the Android phone.
 
 ## P1 — Sync the current Python sender to the collaborator
 
@@ -128,6 +131,7 @@
 - [x] Build and install/launch the debug app on the selected Pixel 6a.
 - [x] Build and verify a signed internal-sideload release APK for contributor review; it uses the local debug signer, not a production key.
 - [x] Publish v0.15.0 with the animated GIF preview and shared Python library changes.
+- [x] Publish v0.16.0 with remembered-display selection and send-time discovery prompts.
 - [x] Create `plughie/SpotLED-Suite`, push the project and signed v0.12.0 `SpotLED-Companion.apk` release, scrub installation-specific values from history, and make the repository public.
 - [x] Add the project attributions to the Android About panel and publish the updated v0.12.1 companion APK.
 - [x] User confirms the About panel and attributions on the Android phone.

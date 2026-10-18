@@ -45,6 +45,8 @@ public final class MainActivity extends Activity {
     private static final String PREFS_NAME = "spotled_settings";
     private static final String PREF_THEME = "theme";
     private static final String PREF_RASTER_TEXT = "raster_text";
+    private static final String PREF_LAST_DEVICE_NAME = "last_device_name";
+    private static final String PREF_LAST_DEVICE_ADDRESS = "last_device_address";
     private static final String PREF_TEXT_TIME_MS = "text_time_ms";
     private static final String PREF_NATIVE_TEXT_TIME_MS_LEGACY = "native_text_time_ms";
     private TextView statusView;
@@ -61,6 +63,7 @@ public final class MainActivity extends Activity {
     private int animatedPreviewFrameIndex;
     private boolean activityResumed;
     private boolean previewAnimationScheduled;
+    private Runnable sendAfterDeviceSelection;
     private final Runnable previewAnimationTick = new Runnable() {
         @Override public void run() {
             previewAnimationScheduled = false;
@@ -79,6 +82,12 @@ public final class MainActivity extends Activity {
         ble = new SpotLedBleClient(this, new SpotLedBleClient.Listener() {
             @Override public void onStatus(String message) {
                 if (statusView != null) statusView.setText(message);
+                if (message.startsWith("Display not found.")
+                        || message.contains("scan failed")
+                        || message.contains("permission is missing")
+                        || message.startsWith("Turn on Bluetooth")
+                        || message.startsWith("Bluetooth LE scanning is unavailable"))
+                    sendAfterDeviceSelection = null;
             }
 
             @Override public void onDevices(List<SpotLedBleClient.FoundDevice> devices) {
@@ -86,6 +95,7 @@ public final class MainActivity extends Activity {
             }
         });
         buildUi();
+        restoreRememberedDevice();
     }
 
     private void buildUi() {
@@ -329,7 +339,10 @@ public final class MainActivity extends Activity {
             boolean granted = results.length > 0;
             for (int result : results) granted &= result == PackageManager.PERMISSION_GRANTED;
             if (granted) ble.scanForDevices();
-            else statusView.setText("Bluetooth permission is required to find the display.");
+            else {
+                sendAfterDeviceSelection = null;
+                statusView.setText("Bluetooth permission is required to find the display.");
+            }
         }
     }
 
@@ -339,8 +352,51 @@ public final class MainActivity extends Activity {
         for (int i = 0; i < devices.size(); i++) labels[i] = devices.get(i).label();
         new AlertDialog.Builder(this)
                 .setTitle("Choose a SpotLED display")
-                .setItems(labels, (dialog, which) -> ble.selectDevice(devices.get(which)))
-                .setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss())
+                .setItems(labels, (dialog, which) -> {
+                    SpotLedBleClient.FoundDevice selected = devices.get(which);
+                    ble.selectDevice(selected);
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                            .putString(PREF_LAST_DEVICE_NAME, selected.name)
+                            .putString(PREF_LAST_DEVICE_ADDRESS, selected.address)
+                            .apply();
+                    Runnable pendingSend = sendAfterDeviceSelection;
+                    sendAfterDeviceSelection = null;
+                    if (pendingSend != null) pendingSend.run();
+                })
+                .setNegativeButton("Cancel", (dialog, which) -> {
+                    sendAfterDeviceSelection = null;
+                    dialog.dismiss();
+                })
+                .setOnCancelListener(dialog -> sendAfterDeviceSelection = null)
+                .show();
+    }
+
+    private boolean restoreRememberedDevice() {
+        if (ble.hasSelectedDevice()) return true;
+        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        String name = preferences.getString(PREF_LAST_DEVICE_NAME, "");
+        String address = preferences.getString(PREF_LAST_DEVICE_ADDRESS, "");
+        return ble.restoreSelectedDevice(name, address);
+    }
+
+    private void sendOrPromptForDisplay(Runnable sendAction, String previewStatus) {
+        if (ble.hasSelectedDevice() || restoreRememberedDevice()) {
+            sendAction.run();
+            return;
+        }
+        statusView.setText(previewStatus);
+        new AlertDialog.Builder(this)
+                .setTitle("No display selected")
+                .setMessage("Find and select a SpotLED now? Your preview will remain on screen, and the content will send after you choose a display.")
+                .setPositiveButton("Find display", (dialog, which) -> {
+                    sendAfterDeviceSelection = sendAction;
+                    requestBluetoothPermissionsThenScan();
+                })
+                .setNegativeButton("Not now", (dialog, which) -> {
+                    sendAfterDeviceSelection = null;
+                    statusView.setText(previewStatus);
+                })
+                .setOnCancelListener(dialog -> sendAfterDeviceSelection = null)
                 .show();
     }
 
@@ -358,13 +414,10 @@ public final class MainActivity extends Activity {
         if (TextOutputMode.useNativeText(rasterText, rotationDegrees)) {
             clearAnimatedPreview();
             preview.setImageBitmap(renderNativeTextPreview(message, textColorSpinner.getSelectedItemPosition()));
-            if (ble.hasSelectedDevice()) {
-                statusView.setText("Sending text with the display's native font and "
-                        + textEffectSpinner.getSelectedItem() + " effect.");
-                ble.sendNativeText(message, textColorSpinner.getSelectedItemPosition(), effectMode, textTimeMs);
-            } else {
-                statusView.setText("Native-font preview ready. Find and select a display before sending.");
-            }
+            sendOrPromptForDisplay(
+                    () -> ble.sendNativeText(message, textColorSpinner.getSelectedItemPosition(),
+                            effectMode, textTimeMs),
+                    "Native-font preview ready.");
             return;
         }
         RgbTransforms.Frame raster = CompactTextRaster.render(
@@ -462,17 +515,12 @@ public final class MainActivity extends Activity {
                 bitmapFromRgb(firstFrame.rgb, firstFrame.width, firstFrame.height),
                 bitmapFromRgb(secondFrame.rgb, secondFrame.width, secondFrame.height),
                 intervalMs);
-        if (!ble.hasSelectedDevice()) {
-            statusView.setText("Animated GIF preview ready. Find and select a display before sending.");
-            return;
-        }
-
         // The tested receive buffer only fits two 64x16 RGB frames. Clamp timing to
         // 250 ms/frame so GIFs with very short source delays do not flash rapidly.
-        statusView.setText("Connecting briefly and sending 2 sampled GIF frames at "
-                + intervalMs + " ms/frame…");
-        ble.sendRgbAnimation(new byte[][] {firstFrame.rgb, secondFrame.rgb},
-                SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT, intervalMs);
+        sendOrPromptForDisplay(
+                () -> ble.sendRgbAnimation(new byte[][] {firstFrame.rgb, secondFrame.rgb},
+                        SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT, intervalMs),
+                "Animated GIF preview ready.");
     }
 
     private Bitmap renderMovieFrame(Movie movie, int timeMs, int width, int height) {
@@ -506,14 +554,10 @@ public final class MainActivity extends Activity {
         Bitmap previewBitmap = bitmapFromRgb(fitted.rgb, fitted.width, fitted.height);
         clearAnimatedPreview();
         preview.setImageBitmap(previewBitmap);
-        if (ble.hasSelectedDevice()) {
-            statusView.setText(effectMode == 0
-                    ? "Connecting briefly and sending one static 24-bit frame…"
-                    : "Sending text with " + textEffectSpinner.getSelectedItem() + " effect…");
-            ble.sendRgbFrame(fitted.rgb, fitted.width, fitted.height, effectMode, frameIntervalMs);
-        } else {
-            statusView.setText("Preview ready. Find and select a display before sending.");
-        }
+        sendOrPromptForDisplay(
+                () -> ble.sendRgbFrame(fitted.rgb, fitted.width, fitted.height,
+                        effectMode, frameIntervalMs),
+                effectMode == 0 ? "Image preview ready." : "Text preview ready.");
     }
 
     private byte[] bitmapToRgb(Bitmap bitmap) {
