@@ -24,6 +24,7 @@ import android.provider.MediaStore;
 import android.util.TypedValue;
 import android.view.View;
 import android.view.Gravity;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -45,6 +46,8 @@ public final class MainActivity extends Activity {
     private static final String PREFS_NAME = "spotled_settings";
     private static final String PREF_THEME = "theme";
     private static final String PREF_RASTER_TEXT = "raster_text";
+    private static final String PREF_IMAGE_ROTATION = "image_rotation";
+    private static final String PREF_IMAGE_FIT = "image_fit";
     private static final String PREF_LAST_DEVICE_NAME = "last_device_name";
     private static final String PREF_LAST_DEVICE_ADDRESS = "last_device_address";
     private static final String PREF_TEXT_TIME_MS = "text_time_ms";
@@ -155,6 +158,7 @@ public final class MainActivity extends Activity {
         rotationSpinner.setAdapter(new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_dropdown_item,
                 new String[] {"0°", "90° clockwise", "180°", "270° clockwise"}));
+        restoreAndRememberSpinner(rotationSpinner, PREF_IMAGE_ROTATION, 4);
         page.addView(rotationSpinner);
 
         fitSpinner = new Spinner(this);
@@ -162,6 +166,7 @@ public final class MainActivity extends Activity {
                 android.R.layout.simple_spinner_dropdown_item,
                 new String[] {"Contain (preserve all, may add padding)",
                         "Cover (fill, crop edges)", "Stretch (fill, distort)"}));
+        restoreAndRememberSpinner(fitSpinner, PREF_IMAGE_FIT, 3);
         page.addView(fitSpinner);
 
         TextView effectLabel = new TextView(this);
@@ -309,6 +314,21 @@ public final class MainActivity extends Activity {
     private static int textTimeMs(SharedPreferences preferences) {
         return preferences.getInt(PREF_TEXT_TIME_MS,
                 preferences.getInt(PREF_NATIVE_TEXT_TIME_MS_LEGACY, 200));
+    }
+
+    private void restoreAndRememberSpinner(Spinner spinner, String preferenceKey, int optionCount) {
+        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        int selection = preferences.getInt(preferenceKey, 0);
+        if (selection < 0 || selection >= optionCount) selection = 0;
+        spinner.setSelection(selection);
+        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view,
+                    int position, long id) {
+                preferences.edit().putInt(preferenceKey, position).apply();
+            }
+
+            @Override public void onNothingSelected(AdapterView<?> parent) { }
+        });
     }
 
     private void showAboutDialog() {

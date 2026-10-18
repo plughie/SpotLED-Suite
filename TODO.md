@@ -11,6 +11,7 @@
 - [x] User confirmed the launcher icon, explicit theme choices, raster-mode option, About placement, and branded app title on the Pixel 6a.
 - [x] Persist the last selected Android display; if none is remembered, prompt to scan and continue the pending send after selection without holding an idle BLE connection.
 - [x] User verified on the Pixel that the display is remembered across app restarts and that sends with no remembered display prompt for discovery; tested with both text and images.
+- [x] Persist image rotation and fit settings across system Photo Picker activity returns.
 - [x] Add Slow/Normal/Fast native-text timing and encode the selected 100/200/300 ms value in CharacterString.
 - [x] Stop SpotLED-MQTT and send `WWW.HYBRID.NET` / Scroll left with Slow (300 ms); BLE transfer was acknowledged.
 - [x] User confirmed the Slow (300 ms) setting makes the message move slowly.
@@ -132,13 +133,19 @@
 - [x] Build and verify a signed internal-sideload release APK for contributor review; it uses the local debug signer, not a production key.
 - [x] Publish v0.15.0 with the animated GIF preview and shared Python library changes.
 - [x] Publish v0.16.0 with remembered-display selection and send-time discovery prompts.
+- [x] Publish v0.16.1 with Photo Picker rotation/fit persistence.
 - [x] Create `plughie/SpotLED-Suite`, push the project and signed v0.12.0 `SpotLED-Companion.apk` release, scrub installation-specific values from history, and make the repository public.
 - [x] Add the project attributions to the Android About panel and publish the updated v0.12.1 companion APK.
 - [x] User confirms the About panel and attributions on the Android phone.
 - [ ] Create/back up an owner-controlled release signing key before public distribution or handing off compatible app updates.
 - [x] User grants Nearby Devices permission and validates SpotLED BLE discovery/GATT connection in the Android app.
 - [x] User confirms Android text and 0° full-screen image work; 90° image works with `stretch` after GATT busy-write handling.
-- [ ] Physically verify Android image rotations at 180° and 270°, and compare `contain`/`cover`/`stretch` as desired.
+- [x] Re-ran 90° Android rotation with persisted picker state; user confirmed the transformed marker layout.
+- [x] User confirmed Android 180° rotation using the asymmetric test PNG and Contain.
+- [x] User confirmed Android 270° rotation using the asymmetric test PNG and Contain.
+- [x] User confirmed 0°/Cover fills the panel with cyan left, magenta center, and yellow right, cropping the portrait frame.
+- [x] User confirmed 0°/Stretch fills the panel as expected; Contain, Cover, and Stretch fit behaviors are now physically compared.
+- [x] Create and upload the asymmetric rotation/fit PNG; user confirmed the 0°/Contain baseline.
 - [x] Replace Android system-font rasterization with the tested independent Python 3×5 glyph table, including B, ASCII case folding, punctuation, and `?` fallback.
 - [ ] Compare Android B on the physical panel against the user's reference photo and adjust only if it still differs.
 - [x] Route image selection through Android's system Photo Picker on API 33+; retain the document picker as a compatibility fallback.
