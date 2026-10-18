@@ -2,6 +2,12 @@
 
 ## 2026-10-17
 
+- Stopped the manually running SpotLED-MQTT process at the user's request before testing BLE text speed; verified its script name and working directory first, and left unrelated Python processes running.
+- Added Slow/Normal/Fast text speed choices in Settings (300/200/100 ms), initially for native CharacterString timing; bumped Android to unreleased v0.15.0 (versionCode 16) and added timing packet tests. User confirmed native Scroll-left at 300 ms moves slowly and 100 ms is about 3× faster.
+- Stopped SpotLED-MQTT before native speed tests, installed and signature-verified the v0.15.0 test APK (initial SHA-256 `39bd8531943a0f99bc94d801edb29b41827f12f01a12b4f43729146fa1c7c3eb`), and passed 21 release tests. Native Slow and Fast text transfers for `WWW.HYBRID.NET` / Scroll left were acknowledged and disconnected normally.
+- Connected the same speed preference to raster FrameAnimation timing and added a regression test. Installed the updated build, enabled raster text, and sent `WWW.HYBRID.NET` / Scroll left at Fast (100 ms) and Slow (300 ms); both BLE transfers acknowledged and disconnected. Raster scroll/speed comparison awaits user confirmation; APK SHA-256 `4652ad66107226eef94c44267b2572835ffba0c1068d0da2524292f73facfbd3`.
+- User confirmed raster Slow (300 ms) matches native Slow. Fast raster is faster than Normal raster, but still slower than Fast native.
+
 - Added the supplied SpotLED artwork as adaptive and density-specific Android launcher icons. Added a gear button opening settings for persistent System/Light/Dark appearance and native/raster text selection, with About inside the settings panel. Native text remains default; raster mode is explicit and nonzero rotations still require rasterization. Bumped Android to unreleased v0.14.0 (versionCode 15), added text-mode routing tests, and updated project docs/TODO. All 20 release JVM tests pass; the signed APK is verified and installed on the Pixel 6a. No SpotLED content was sent.
 - Updated the Android in-app header title to “SPOTLED Companion” to match the app name and launcher label; tightened it to one line, rebuilt, verified, and reinstalled. All 20 release tests pass. Current v0.14.0 APK SHA-256 `07167b19ca02640494ab46cbd178beb58b18d6f78e018b57a02a803fa3b52286`. ADB screenshot confirms the full one-line title and gear icon; no SpotLED transfer was sent.
 - User confirmed the v0.14.0 icon, title, theme settings, raster/native text switch, Settings/About menu, and overall changes. Preparing the confirmed build for GitHub publication.

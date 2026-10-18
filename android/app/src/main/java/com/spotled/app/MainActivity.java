@@ -43,6 +43,8 @@ public final class MainActivity extends Activity {
     private static final String PREFS_NAME = "spotled_settings";
     private static final String PREF_THEME = "theme";
     private static final String PREF_RASTER_TEXT = "raster_text";
+    private static final String PREF_TEXT_TIME_MS = "text_time_ms";
+    private static final String PREF_NATIVE_TEXT_TIME_MS_LEGACY = "native_text_time_ms";
     private TextView statusView;
     private EditText textInput;
     private Spinner rotationSpinner;
@@ -208,6 +210,18 @@ public final class MainActivity extends Activity {
         themeSpinner.setSelection("light".equals(storedTheme) ? 1 : "dark".equals(storedTheme) ? 2 : 0);
         content.addView(themeSpinner);
 
+        TextView speedLabel = new TextView(this);
+        speedLabel.setText("Text speed");
+        speedLabel.setTextSize(16);
+        speedLabel.setPadding(0, dp(16), 0, 0);
+        content.addView(speedLabel);
+        Spinner speedSpinner = new Spinner(this);
+        speedSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item,
+                new String[] {"Slow (300 ms)", "Normal (200 ms)", "Fast (100 ms)"}));
+        speedSpinner.setSelection(nativeTextSpeedPosition(textTimeMs(preferences)));
+        content.addView(speedSpinner);
+
         Switch rasterSwitch = new Switch(this);
         rasterSwitch.setText("Use raster text");
         rasterSwitch.setTextSize(16);
@@ -239,14 +253,33 @@ public final class MainActivity extends Activity {
                     String selectedTheme = themeSpinner.getSelectedItemPosition() == 1 ? "light"
                             : themeSpinner.getSelectedItemPosition() == 2 ? "dark" : "system";
                     boolean themeChanged = !selectedTheme.equals(storedTheme);
+                    int textTimeMs = nativeTextTimeForPosition(speedSpinner.getSelectedItemPosition());
                     preferences.edit()
                             .putString(PREF_THEME, selectedTheme)
                             .putBoolean(PREF_RASTER_TEXT, rasterSwitch.isChecked())
+                            .putInt(PREF_TEXT_TIME_MS, textTimeMs)
                             .apply();
                     dialog.dismiss();
                     if (themeChanged) recreate();
                 }));
         dialog.show();
+    }
+
+    private static int nativeTextTimeForPosition(int position) {
+        if (position == 0) return 300;
+        if (position == 2) return 100;
+        return 200;
+    }
+
+    private static int nativeTextSpeedPosition(int timeMs) {
+        if (timeMs <= 150) return 2;
+        if (timeMs >= 250) return 0;
+        return 1;
+    }
+
+    private static int textTimeMs(SharedPreferences preferences) {
+        return preferences.getInt(PREF_TEXT_TIME_MS,
+                preferences.getInt(PREF_NATIVE_TEXT_TIME_MS_LEGACY, 200));
     }
 
     private void showAboutDialog() {
@@ -299,6 +332,7 @@ public final class MainActivity extends Activity {
             return;
         }
         int effectMode = textEffectSpinner.getSelectedItemPosition();
+        int textTimeMs = textTimeMs(getSharedPreferences(PREFS_NAME, MODE_PRIVATE));
         boolean rasterText = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getBoolean(PREF_RASTER_TEXT, false);
         int rotationDegrees = rotationSpinner.getSelectedItemPosition() * 90;
@@ -307,7 +341,7 @@ public final class MainActivity extends Activity {
             if (ble.hasSelectedDevice()) {
                 statusView.setText("Sending text with the display's native font and "
                         + textEffectSpinner.getSelectedItem() + " effect.");
-                ble.sendNativeText(message, textColorSpinner.getSelectedItemPosition(), effectMode);
+                ble.sendNativeText(message, textColorSpinner.getSelectedItemPosition(), effectMode, textTimeMs);
             } else {
                 statusView.setText("Native-font preview ready. Find and select a display before sending.");
             }
@@ -315,7 +349,7 @@ public final class MainActivity extends Activity {
         }
         RgbTransforms.Frame raster = CompactTextRaster.render(
                 message, textColorSpinner.getSelectedItemPosition());
-        sendRgbContent(raster.rgb, raster.width, raster.height, effectMode);
+        sendRgbContent(raster.rgb, raster.width, raster.height, effectMode, textTimeMs);
     }
 
     private Bitmap renderNativeTextPreview(String text, int paletteIndex) {
@@ -438,6 +472,11 @@ public final class MainActivity extends Activity {
     }
 
     private void sendRgbContent(byte[] sourceRgb, int sourceWidth, int sourceHeight, int effectMode) {
+        sendRgbContent(sourceRgb, sourceWidth, sourceHeight, effectMode, 500);
+    }
+
+    private void sendRgbContent(byte[] sourceRgb, int sourceWidth, int sourceHeight,
+                                int effectMode, int frameIntervalMs) {
         int rotation = rotationSpinner.getSelectedItemPosition() * 90;
         RgbTransforms.Frame fitted = transformImage(
                 bitmapFromRgb(sourceRgb, sourceWidth, sourceHeight));
@@ -447,7 +486,7 @@ public final class MainActivity extends Activity {
             statusView.setText(effectMode == 0
                     ? "Connecting briefly and sending one static 24-bit frame…"
                     : "Sending text with " + textEffectSpinner.getSelectedItem() + " effect…");
-            ble.sendRgbFrame(fitted.rgb, fitted.width, fitted.height, effectMode);
+            ble.sendRgbFrame(fitted.rgb, fitted.width, fitted.height, effectMode, frameIntervalMs);
         } else {
             statusView.setText("Preview ready. Find and select a display before sending.");
         }

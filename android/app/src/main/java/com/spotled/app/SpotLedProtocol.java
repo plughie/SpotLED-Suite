@@ -67,9 +67,16 @@ final class SpotLedProtocol {
 
     /** Native firmware text transfers: WordStock font followed by CharacterString. */
     static byte[][] buildNativeTextTransfers(String text, int paletteIndex, int effectMode) {
+        return buildNativeTextTransfers(text, paletteIndex, effectMode, 200);
+    }
+
+    static byte[][] buildNativeTextTransfers(String text, int paletteIndex, int effectMode,
+                                             int timeMs) {
         if (text == null || text.isEmpty()) throw new IllegalArgumentException("Text must not be empty");
         if (text.length() > 160) throw new IllegalArgumentException("Text exceeds the 160-character device limit");
         if (!isNativeTextEffect(effectMode)) throw new IllegalArgumentException("Unknown native text effect");
+        if (timeMs < 1 || timeMs > 0xffff)
+            throw new IllegalArgumentException("Native text timing must be from 1 to 65,535 ms");
         for (int i = 0; i < text.length(); i++) {
             char ch = text.charAt(i);
             if (Character.isSurrogate(ch))
@@ -94,7 +101,7 @@ final class SpotLedProtocol {
             int cp = codePoints[index];
             follow.writeBytes(object(3, new byte[] {(byte) (cp >> 8), (byte) cp}));
         }
-        follow.writeBytes(object(7, new byte[] {0, 0, (byte) 200}));
+        follow.writeBytes(object(7, new byte[] {0, (byte) (timeMs >> 8), (byte) timeMs}));
         follow.writeBytes(object(8, new byte[] {(byte) effectMode}));
         byte[] characterString = objectWithFollow(4, content.toByteArray(), follow.toByteArray());
 

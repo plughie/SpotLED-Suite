@@ -297,14 +297,18 @@ final class SpotLedBleClient {
     }
 
     void sendRgbFrame(byte[] rgb, int width, int height, int effectMode) {
-        sendRgbAnimation(new byte[][] {rgb}, width, height, 500, effectMode, false);
+        sendRgbFrame(rgb, width, height, effectMode, 500);
+    }
+
+    void sendRgbFrame(byte[] rgb, int width, int height, int effectMode, int intervalMs) {
+        sendRgbAnimation(new byte[][] {rgb}, width, height, intervalMs, effectMode, false);
     }
 
     void sendRgbAnimation(byte[][] frames, int width, int height, int intervalMs) {
         sendRgbAnimation(frames, width, height, intervalMs, 0, true);
     }
 
-    void sendNativeText(String text, int paletteIndex, int effectMode) {
+    void sendNativeText(String text, int paletteIndex, int effectMode, int timeMs) {
         FoundDevice target = selectedDevice;
         if (target == null) {
             status("Find and select a SpotLED display before sending.");
@@ -317,7 +321,8 @@ final class SpotLedBleClient {
         new Thread(() -> {
             boolean transferAcknowledged = false;
             try {
-                byte[][] payloads = SpotLedProtocol.buildNativeTextTransfers(text, paletteIndex, effectMode);
+                byte[][] payloads = SpotLedProtocol.buildNativeTextTransfers(
+                        text, paletteIndex, effectMode, timeMs);
                 connectForTransfer(target);
                 writeCommand(SpotLedProtocol.buildNativeTextSetupPlaylist());
                 Thread.sleep(200);

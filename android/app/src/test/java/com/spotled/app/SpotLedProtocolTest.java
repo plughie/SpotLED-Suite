@@ -74,6 +74,25 @@ public class SpotLedProtocolTest {
         assertEquals(SpotLedProtocol.checksum(characterString, 14), characterString[14] & 0xff);
     }
 
+    @Test public void nativeTextTimingIsEncodedInCharacterStringTimeObject() {
+        byte[] normal = SpotLedProtocol.buildNativeTextTransfers("A", 0, 3, 200)[1];
+        byte[] slow = SpotLedProtocol.buildNativeTextTransfers("A", 0, 3, 300)[1];
+        int timeOffset = normal.length - 18;
+        assertEquals(7, u16(normal, timeOffset + 4));
+        assertEquals(200, u16(normal, timeOffset + 7));
+        assertEquals(300, u16(slow, timeOffset + 7));
+        assertThrows(IllegalArgumentException.class,
+                () -> SpotLedProtocol.buildNativeTextTransfers("A", 0, 3, 0));
+    }
+
+    @Test public void rasterTextTimingIsEncodedInFrameAnimationTimeObject() {
+        byte[] frame = new byte[] {(byte) 255, (byte) 255, (byte) 255};
+        byte[] slow = SpotLedProtocol.buildRgbAnimation(frame, 1, 1, 300, 3);
+        byte[] fast = SpotLedProtocol.buildRgbAnimation(frame, 1, 1, 100, 3);
+        assertEquals(300, u16(slow, slow.length - 11));
+        assertEquals(100, u16(fast, fast.length - 11));
+    }
+
     @Test public void nativeTextSetupPacketsMatchPythonCommandFraming() {
         byte[] playlist = SpotLedProtocol.buildNativeTextSetupPlaylist();
         byte[] pixelMap = SpotLedProtocol.buildNativeTextSetupPixelMap();

@@ -8,6 +8,14 @@
 - [x] Build and install v0.14.0 on the Pixel 6a; ADB screenshots confirmed the branded title, gear, and dark settings panel.
 - [x] Rename the in-app title to “SPOTLED Companion”.
 - [x] User confirmed the launcher icon, explicit theme choices, raster-mode option, About placement, and branded app title on the Pixel 6a.
+- [x] Add Slow/Normal/Fast native-text timing and encode the selected 100/200/300 ms value in CharacterString.
+- [x] Stop SpotLED-MQTT and send `WWW.HYBRID.NET` / Scroll left with Slow (300 ms); BLE transfer was acknowledged.
+- [x] User confirmed the Slow (300 ms) setting makes the message move slowly.
+- [x] Send the same text/effect at Fast (100 ms); user confirmed it is about 3× faster than Slow.
+- [x] Send `WWW.HYBRID.NET` / Scroll left in raster mode at Fast (100 ms); BLE transfer was acknowledged.
+- [x] Send the same raster text/effect at Slow (300 ms); BLE transfer was acknowledged.
+- [x] User confirmed raster Slow matches native Slow.
+- [x] User confirmed Fast raster is faster than Normal raster but slower than Fast native.
 
 ## P1 — Validate Android native marquee text
 
