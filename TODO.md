@@ -1,5 +1,14 @@
 # Prioritized TODO
 
+## P1 — Android app polish
+
+- [x] Use the supplied SpotLED artwork as the launcher icon for adaptive and legacy Android launchers.
+- [x] Add persisted System/Light/Dark themes and a gear menu with Settings and About.
+- [x] Add a persisted native/raster text switch; keep native text as the default and require raster for rotation.
+- [x] Build and install v0.14.0 on the Pixel 6a; ADB screenshots confirmed the branded title, gear, and dark settings panel.
+- [x] Rename the in-app title to “SPOTLED Companion”.
+- [x] User confirmed the launcher icon, explicit theme choices, raster-mode option, About placement, and branded app title on the Pixel 6a.
+
 ## P1 — Validate Android native marquee text
 
 - [x] Route Scroll up/down/left/right and Scroll through native WordStock/CharacterString transfers at 0° so the full message is sent without image-fit cropping.

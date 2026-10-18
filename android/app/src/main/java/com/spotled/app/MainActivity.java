@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.bluetooth.BluetoothAdapter;
+import android.content.SharedPreferences;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -18,14 +19,18 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.util.TypedValue;
 import android.view.View;
+import android.view.Gravity;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import java.io.InputStream;
@@ -35,6 +40,9 @@ import java.util.List;
 public final class MainActivity extends Activity {
     private static final int REQUEST_PERMISSIONS = 41;
     private static final int REQUEST_IMAGE = 42;
+    private static final String PREFS_NAME = "spotled_settings";
+    private static final String PREF_THEME = "theme";
+    private static final String PREF_RASTER_TEXT = "raster_text";
     private TextView statusView;
     private EditText textInput;
     private Spinner rotationSpinner;
@@ -45,6 +53,7 @@ public final class MainActivity extends Activity {
     private SpotLedBleClient ble;
 
     @Override protected void onCreate(Bundle state) {
+        applyStoredTheme();
         super.onCreate(state);
         ble = new SpotLedBleClient(this, new SpotLedBleClient.Listener() {
             @Override public void onStatus(String message) {
@@ -65,10 +74,29 @@ public final class MainActivity extends Activity {
         page.setPadding(dp(20), dp(18), dp(20), dp(24));
         scroll.addView(page);
 
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        page.addView(header, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
         TextView title = new TextView(this);
-        title.setText("SPOTLED");
-        title.setTextSize(26);
-        page.addView(title);
+        title.setText("SPOTLED Companion");
+        title.setTextSize(22);
+        title.setSingleLine(true);
+        header.addView(title, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+        ImageButton settings = new ImageButton(this);
+        settings.setImageResource(R.drawable.ic_settings_gear);
+        settings.setContentDescription("Settings");
+        TypedValue selectableBackground = new TypedValue();
+        if (getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless,
+                selectableBackground, true) && selectableBackground.resourceId != 0)
+            settings.setBackgroundResource(selectableBackground.resourceId);
+        else settings.setBackgroundColor(Color.TRANSPARENT);
+        settings.setOnClickListener(view -> showSettingsDialog());
+        header.addView(settings, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
         statusView = new TextView(this);
         statusView.setText("Find and select a SpotLED_* display to begin.");
@@ -152,11 +180,73 @@ public final class MainActivity extends Activity {
         note.setPadding(0, dp(12), 0, 0);
         page.addView(note);
 
+        setContentView(scroll);
+    }
+
+    private void applyStoredTheme() {
+        String theme = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_THEME, "system");
+        if ("light".equals(theme)) setTheme(R.style.AppThemeLight);
+        else if ("dark".equals(theme)) setTheme(R.style.AppThemeDark);
+        else setTheme(R.style.AppThemeSystem);
+    }
+
+    private void showSettingsDialog() {
+        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(8), dp(20), dp(8));
+
+        TextView themeLabel = new TextView(this);
+        themeLabel.setText("Appearance");
+        themeLabel.setTextSize(16);
+        content.addView(themeLabel);
+        Spinner themeSpinner = new Spinner(this);
+        themeSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item,
+                new String[] {"System", "Light", "Dark"}));
+        String storedTheme = preferences.getString(PREF_THEME, "system");
+        themeSpinner.setSelection("light".equals(storedTheme) ? 1 : "dark".equals(storedTheme) ? 2 : 0);
+        content.addView(themeSpinner);
+
+        Switch rasterSwitch = new Switch(this);
+        rasterSwitch.setText("Use raster text");
+        rasterSwitch.setTextSize(16);
+        rasterSwitch.setPadding(0, dp(16), 0, dp(4));
+        rasterSwitch.setChecked(preferences.getBoolean(PREF_RASTER_TEXT, false));
+        content.addView(rasterSwitch);
+
+        TextView rasterHelp = new TextView(this);
+        rasterHelp.setText("Off uses the display's native font for normal text. On sends text as pixels; rotation also requires raster text.");
+        rasterHelp.setTextSize(13);
+        content.addView(rasterHelp);
+
         Button about = new Button(this);
         about.setText("About SpotLED Companion");
-        about.setOnClickListener(view -> showAboutDialog());
-        page.addView(about);
-        setContentView(scroll);
+        content.addView(about);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Settings")
+                .setView(content)
+                .setPositiveButton("Done", null)
+                .setNegativeButton("Cancel", (ignored, which) -> ignored.dismiss())
+                .create();
+        about.setOnClickListener(view -> {
+            dialog.dismiss();
+            showAboutDialog();
+        });
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    String selectedTheme = themeSpinner.getSelectedItemPosition() == 1 ? "light"
+                            : themeSpinner.getSelectedItemPosition() == 2 ? "dark" : "system";
+                    boolean themeChanged = !selectedTheme.equals(storedTheme);
+                    preferences.edit()
+                            .putString(PREF_THEME, selectedTheme)
+                            .putBoolean(PREF_RASTER_TEXT, rasterSwitch.isChecked())
+                            .apply();
+                    dialog.dismiss();
+                    if (themeChanged) recreate();
+                }));
+        dialog.show();
     }
 
     private void showAboutDialog() {
@@ -209,8 +299,11 @@ public final class MainActivity extends Activity {
             return;
         }
         int effectMode = textEffectSpinner.getSelectedItemPosition();
-        if (rotationSpinner.getSelectedItemPosition() == 0) {
-            preview.setImageBitmap(renderMarqueePreview(message, textColorSpinner.getSelectedItemPosition()));
+        boolean rasterText = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(PREF_RASTER_TEXT, false);
+        int rotationDegrees = rotationSpinner.getSelectedItemPosition() * 90;
+        if (TextOutputMode.useNativeText(rasterText, rotationDegrees)) {
+            preview.setImageBitmap(renderNativeTextPreview(message, textColorSpinner.getSelectedItemPosition()));
             if (ble.hasSelectedDevice()) {
                 statusView.setText("Sending text with the display's native font and "
                         + textEffectSpinner.getSelectedItem() + " effect.");
@@ -225,7 +318,7 @@ public final class MainActivity extends Activity {
         sendRgbContent(raster.rgb, raster.width, raster.height, effectMode);
     }
 
-    private Bitmap renderMarqueePreview(String text, int paletteIndex) {
+    private Bitmap renderNativeTextPreview(String text, int paletteIndex) {
         int[] pixels = new int[SpotLedProtocol.SCREEN_WIDTH * SpotLedProtocol.SCREEN_HEIGHT];
         int[] codePoints = text.codePoints().toArray();
         int xStart = 0;

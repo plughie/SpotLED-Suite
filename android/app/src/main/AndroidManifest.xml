@@ -8,8 +8,10 @@
 
     <application
         android:allowBackup="false"
-        android:label="SPOTLED"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="SpotLED Companion"
+        android:theme="@style/AppThemeSystem">
         <activity
             android:name=".MainActivity"
             android:exported="true">

@@ -98,6 +98,14 @@ public class SpotLedProtocolTest {
         assertEquals(23, CompactTextRaster.render("HYBRID", 0).width);
     }
 
+    @Test public void nativeTextIsDefaultAtZeroDegreesAndRasterCanBeForced() {
+        assertTrue(TextOutputMode.useNativeText(false, 0));
+        assertFalse(TextOutputMode.useNativeText(true, 0));
+        assertFalse(TextOutputMode.useNativeText(false, 90));
+        assertFalse(TextOutputMode.useNativeText(false, 180));
+        assertFalse(TextOutputMode.useNativeText(false, 270));
+    }
+
     @Test public void compactTextUnsupportedCharactersUseQuestionMarkGlyph() {
         assertArrayEquals(CompactTextRaster.rowsFor('?'), CompactTextRaster.rowsFor('é'));
     }

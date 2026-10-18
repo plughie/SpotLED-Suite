@@ -1,6 +1,6 @@
 # SPOTLED Android prototype
 
-Native Java Android app prototype. It provides text/image input, solid and static-rainbow text colors, system Photo Picker on API 33+, 0°/90°/180°/270° rotation, a 64×16 preview, `contain`/`cover`/`stretch` fit choices, eight text effects, BLE discovery for any `SpotLED_*` name with a chooser shortly after the first match, one bounded fresh-GATT retry after connection failure, and acknowledged transfers. All unrotated text now uses native WordStock/CharacterString transfers and the Python sender's captured 16×16 glyphs where available; the preview uses those same glyph bitmaps. Rotated text retains the RGB raster path for orientation control. The updated font preview is unit-tested; physical W/N legibility and native effect rendering still need validation. Animated GIFs are sampled to two frames, transformed with rotation/fit, and sent at 250–1,000 ms/frame; the 7,280-byte receive limit allows at most two full-color 64×16 frames. The About dialog credits DuvTheDove, Bug-Mag.net, clavo, and OpenAI Codex. Device selection stores the target without opening GATT; each send connects and disconnects afterward. Scanning continues in 3-second intervals for up to 15 seconds. None remains unavailable because omitting the effect object triggered the firmware loading icon.
+Native Java Android app prototype. It provides text/image input, solid and static-rainbow text colors, system Photo Picker on API 33+, 0°/90°/180°/270° rotation, a 64×16 preview, `contain`/`cover`/`stretch` fit choices, eight text effects, BLE discovery for any `SpotLED_*` name with a chooser shortly after the first match, one bounded fresh-GATT retry after connection failure, and acknowledged transfers. All unrotated text uses native WordStock/CharacterString transfers and captured 16×16 glyphs shared with Python; rotated text retains RGB rasterization. Settings include System/Light/Dark appearance and a native/raster text switch; the launcher icon uses the supplied artwork, and the gear menu contains Settings and About. The user confirmed the icon, settings, raster/native switch, and branded title on the Pixel 6a. Animated GIFs are sampled to two frames, transformed with rotation/fit, and sent at 250–1,000 ms/frame; the 7,280-byte receive limit allows at most two full-color 64×16 frames. The About dialog credits DuvTheDove, Bug-Mag.net, clavo, and OpenAI Codex. Device selection stores the target without opening GATT; each send connects and disconnects afterward. Scanning continues in 3-second intervals for up to 15 seconds. None remains unavailable because omitting the effect object triggered the firmware loading icon.
 
 ## Build and test
 
@@ -20,13 +20,14 @@ Build the signed internal-sideload variant with:
 ./gradlew testReleaseUnitTest assembleRelease
 ```
 
-Latest release: [SpotLED-Companion.apk v0.13.0](https://github.com/plughie/SpotLED-Suite/releases/download/v0.13.0/SpotLED-Companion.apk), package `com.spotled.app`. The signed local APK is at `app/build/outputs/apk/release/SpotLED-Companion.apk`; SHA-256: `0222ee89039d6b8d1e95b8cd3211bf8546add1a037781e8398e0a4223bffe0ab`.
+Latest release: [SpotLED-Companion.apk v0.14.0](https://github.com/plughie/SpotLED-Suite/releases/download/v0.14.0/SpotLED-Companion.apk), package `com.spotled.app`. The signed APK SHA-256 is `07167b19ca02640494ab46cbd178beb58b18d6f78e018b57a02a803fa3b52286`.
 
 For this contributor-test build, `release` uses the local Android debug signing identity so the APK can update the currently installed prototype. The APK is signed and sideloadable, but this is **not a production release key**. No private signing key or password is in the project. To distribute future compatible updates or publish publicly, create and securely back up an owner-controlled release key, then use that same key for every update. The collaborator can install this APK fresh; an existing app signed by a different key cannot be updated in place.
 
 ## Current validation
 
-- All 19 release JVM protocol/transform/font tests pass, including native WordStock/CharacterString framing, captured W/N glyphs, effect routing, and setup commands.
+- All 20 release JVM protocol/transform/font tests pass, including native WordStock/CharacterString framing, captured W/N glyphs, effect routing, settings text-mode selection, and setup commands.
+- User confirmed the v0.14.0 launcher icon, “SPOTLED Companion” header, gear-based Settings/About, appearance options, and native/raster text switch on the Pixel 6a.
 - User confirmed the v0.13.0 native Scroll-left text output and improved glyph rendering on the SpotLED; other native effect choices have not yet been individually checked.
 - User confirmed the About SpotLED Companion dialog and project attributions on the Android phone; this is included in signed v0.12.1.
 - The debug app builds and is installed/launched on the Pixel 6a.
