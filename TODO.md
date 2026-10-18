@@ -135,6 +135,7 @@
 - [x] Publish v0.15.0 with the animated GIF preview and shared Python library changes.
 - [x] Publish v0.16.0 with remembered-display selection and send-time discovery prompts.
 - [x] Publish v0.16.1 with Photo Picker rotation/fit persistence.
+- [x] Publish v0.16.2 with 150 ms and 250 ms speed presets across Android and Python apps.
 - [x] Create `plughie/SpotLED-Suite`, push the project and signed v0.12.0 `SpotLED-Companion.apk` release, scrub installation-specific values from history, and make the repository public.
 - [x] Add the project attributions to the Android About panel and publish the updated v0.12.1 companion APK.
 - [x] User confirms the About panel and attributions on the Android phone.
