@@ -1,17 +1,11 @@
 """Offline regression checks for the reconstructed SPOTLED wire format."""
 
-import importlib.util
 import sys
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
-SCRIPT = Path(__file__).with_name("SPOTLED-v3.py")
-SPEC = importlib.util.spec_from_file_location("spotled_v3", SCRIPT)
-spotled = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(spotled)
+from spotled_common import sender as spotled
 
 
 class CliTests(unittest.TestCase):
@@ -26,10 +20,25 @@ class CliTests(unittest.TestCase):
     def test_raster_font_is_explicit_so_native_text_stays_the_default(self):
         with patch.object(sys, "argv", ["SPOTLED-v3.py", "HYBRID"]):
             self.assertIsNone(spotled.parse_cli_args().raster_font)
+            self.assertEqual(spotled.parse_cli_args().text_mode, "native")
+            self.assertEqual(spotled.parse_cli_args().text_speed, "normal")
         with patch.object(sys, "argv", [
             "SPOTLED-v3.py", "HYBRID", "rainbow", "scroll", "--raster-font", "3x5"
         ]):
             self.assertEqual(spotled.parse_cli_args().raster_font, "3x5")
+
+    def test_android_text_mode_and_speed_options(self):
+        with patch.object(sys, "argv", [
+            "SPOTLED-v3.py", "HYBRID", "white", "left",
+            "--text-mode", "raster", "--text-speed", "fast"
+        ]):
+            args = spotled.parse_cli_args()
+        self.assertEqual(args.text_mode, "raster")
+        self.assertEqual(spotled.text_speed_ms(args.text_speed), 100)
+        self.assertEqual(spotled.text_speed_ms("slow"), 300)
+        self.assertEqual(spotled.text_speed_ms("normal"), 200)
+        with self.assertRaises(ValueError):
+            spotled.text_speed_ms("turbo")
 
 
 class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -55,6 +64,19 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
              patch("builtins.input", return_value="2"):
             found = await spotled.find_spotled_device("SpotLED_*", scan_timeout=1)
         self.assertIs(found, devices[1])
+
+
+class TextModeDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_main_raster_mode_uses_android_style_raster_sender_and_interval(self):
+        with patch.object(spotled, "send_rotated_text", new=AsyncMock()) as raster_send:
+            await spotled.main(
+                "A", color="red", mode=3, device_name="SpotLED_AB12",
+                text_mode="raster", time_ms=100,
+            )
+        raster_send.assert_awaited_once_with(
+            "A", "red", 0, "contain", raster_font="3x5", text_layout="whole",
+            device_name="SpotLED_AB12", mode=3, frame_time_ms=100,
+        )
 
 
 class ConnectionTests(unittest.IsolatedAsyncioTestCase):
@@ -238,6 +260,10 @@ class ObjectEncodingTests(unittest.TestCase):
         self.assertEqual(encoded[35:38], bytes.fromhex("0000c8"))
         self.assertEqual(encoded[39:45], bytes.fromhex("000000080008"))
         self.assertEqual(encoded[45], 3)
+        slow_text = spotled.build_character_string("A", time_ms=300, mode=3)
+        self.assertEqual(slow_text[35:38], bytes.fromhex("00012c"))
+        with self.assertRaises(ValueError):
+            spotled.build_character_string("A", time_ms=0)
 
         for start, length in ((0, 10), (10, 10), (20, 9), (29, 10), (39, 8)):
             object_data = encoded[start : start + length]
@@ -320,6 +346,14 @@ class ObjectEncodingTests(unittest.TestCase):
             self.assertEqual(int.from_bytes(object_header[:4], "big"), length)
             self.assertEqual(object_header[length - 1], spotled.check_sum(object_header[:-1]))
 
+    def test_frame_animation_encodes_android_text_speed_interval(self):
+        frame = spotled.build_rgb_frame(2, 1, bytes((255, 255, 255)) * 2)
+        for interval in (100, 200, 300):
+            with self.subTest(interval=interval):
+                animation = spotled.build_frame_animation([frame], frame_time_ms=interval, mode=3)
+                self.assertEqual(int.from_bytes(animation[34:36], "big"), interval)
+                self.assertEqual(animation[43], 3)
+
     def test_rgb_frame_rejects_wrong_pixel_count(self):
         with self.assertRaises(ValueError):
             spotled.build_rgb_frame(2, 1, b"\0\0\0")
@@ -376,9 +410,32 @@ class ObjectEncodingTests(unittest.TestCase):
         payload, frame_count, interval = spotled.build_animation_transfer(
             frames, max_frames=3, receive_capacity=80, width=2, height=1
         )
-        self.assertEqual(frame_count, 1)
+        self.assertEqual(frame_count, 2)
         self.assertLessEqual(len(payload), 80)
-        self.assertEqual(int.from_bytes(payload[21:23], "big"), 1)
+        self.assertEqual(int.from_bytes(payload[21:23], "big"), 2)
+
+    def test_animation_uses_maximum_frame_count_that_fits_receive_capacity(self):
+        colors = [bytes((r, 0, 0)) * 2 for r in (32, 96, 160, 224)]
+        frames = [(pixels, 300) for pixels in colors]
+        def payload_size(selected_frames):
+            frame_objects = [spotled.build_rgb_frame(2, 1, pixels)
+                             for pixels, _ in selected_frames]
+            animation = spotled.build_frame_animation(
+                frame_objects, frame_time_ms=300, mode=0
+            )
+            return len(spotled.wrap_set_data(animation))
+
+        four_frame_capacity = payload_size(frames)
+        _, frame_count, _ = spotled.build_animation_transfer(
+            frames, max_frames=4, receive_capacity=four_frame_capacity, width=2, height=1
+        )
+        self.assertEqual(frame_count, 4)
+
+        two_frame_capacity = payload_size((frames[0], frames[-1]))
+        _, frame_count, _ = spotled.build_animation_transfer(
+            frames, max_frames=4, receive_capacity=two_frame_capacity, width=2, height=1
+        )
+        self.assertEqual(frame_count, 2)
 
     def test_independent_three_by_five_font_and_glyph_rotation(self):
         width, height, pixels = spotled.render_text_rgb("A", raster_font="3x5")

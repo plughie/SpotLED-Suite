@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 .venv/
 SpotLED-MQTT/.venv/
+SpotLED-MQTT/env.sh
+*.egg-info/
+/build/
+/dist/
 *.log
 
 # macOS

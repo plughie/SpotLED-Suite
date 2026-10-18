@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spotled-suite-common"
+version = "0.15.0"
+description = "Shared Python sender and protocol library for SpotLED Suite"
+requires-python = ">=3.10"
+dependencies = ["bleak", "Pillow"]
+
+[tool.setuptools]
+packages = ["spotled_common"]

@@ -1,7 +1,15 @@
+import asyncio
 import unittest
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from spotled_mqtt import (
     Notification,
+    SpotLedMqttService,
     Weather,
     format_weather,
     parse_color,
@@ -56,6 +64,24 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual(text_effect_mode("scroll"), 6)
         with self.assertRaises(ValueError):
             text_effect_mode("wipe")
+
+    def test_service_reads_shared_python_text_mode_and_speed_settings(self):
+        fake_sender = SimpleNamespace(main=AsyncMock())
+        with patch.dict("os.environ", {
+                "SPOTLED_TEXT_MODE": "raster", "SPOTLED_TEXT_SPEED": "fast"}), \
+             patch("spotled_mqtt.send_text", new=fake_sender.main):
+            service = SpotLedMqttService()
+            self.assertEqual(service.text_mode, "raster")
+            self.assertEqual(service.text_time_ms, 100)
+
+            async def send_notification():
+                await service._send("HELLO", (255, 0, 0))
+
+            asyncio.run(send_notification())
+        fake_sender.main.assert_awaited_once_with(
+            "HELLO", color=(255, 0, 0), mode=3, device_name="",
+            text_mode="raster", time_ms=100,
+        )
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@
 - [x] Receive an AWTRIX notification payload, transfer it, and return to the cached weather reading after its duration; user physically confirmed notification behavior.
 - [x] Confirm the user-preferred explicit Scroll-left effect displays as scrolling on the SpotLED.
 - [x] User confirmed the temperature refreshed after 15 minutes.
+- [x] User confirmed `SPOTLED_TEXT_SPEED` applies to both MQTT notifications and periodic weather text.
 - [x] Scrub machine-specific broker/topic/device/readout values from GitHub-facing documentation and require MQTT/device settings through environment variables.
 - [x] Keep SpotLED-MQTT manually started to avoid contention with the companion app; do not configure auto-start.
 - [ ] Decide whether unsupported AWTRIX icon/sound behavior needs an alternate SpotLED approximation.
@@ -40,8 +41,9 @@
 ## P1 — Validate Android animated GIF transfer
 
 - [x] Install the updated APK and send an animated GIF from the Photo Picker to a SpotLED; user confirmed Android GIF animation.
-- [ ] Confirm frame pacing is comfortable (minimum 250 ms/frame) and that rotation/fit controls affect both sampled frames consistently.
-- [ ] Decide whether GIF preview should remain first-frame-only or gain a play/animation preview.
+- [x] User confirmed Android GIF handling works the same as the CLI, including its safe pacing and frame transforms.
+- [x] Animate the GIF preview using the same sampled, transformed frames and safe interval as the display transfer.
+- [ ] User visually confirms the animated GIF preview on the Android phone.
 
 ## P1 — Sync the current Python sender to the collaborator
 
@@ -71,6 +73,13 @@
 - [x] Validate file-based 90° image upload after live capability preflight; user confirmed expected marker layout.
 
 ## P1 — Make the Python reference dependable
+
+- [x] Create installable `spotled_common` settings/API/sender modules shared by the CLI and MQTT bridge; keep `SPOTLED-v3.py` as a compatibility entry point.
+- [x] Install the common package from the MQTT app's requirements and remove dynamic loading of the hyphenated script.
+- [x] Add Android-compatible `--text-mode native|raster` and Slow/Normal/Fast timing options to the Python sender.
+- [x] Expose matching `SPOTLED_TEXT_MODE` and `SPOTLED_TEXT_SPEED` configuration in SpotLED-MQTT.
+- [x] User physically tested Python native/raster scroll speed; MQTT's `SPOTLED_TEXT_SPEED` applies to notifications and periodic weather text.
+- [ ] Physically compare MQTT raster mode against native/Android if the raster MQTT setting will be used.
 
 - [x] Parse screen-information response and start/end acknowledgments in image path.
 - [x] Audit Android response/status flow: send-end ACK confirms transfer status, not render completion. A recipient-status command class exists but is not called by the decompiled app; no render-complete signal is evidenced. Continue to require visual confirmation for render claims.
@@ -102,7 +111,7 @@
 - [x] Define/test Unicode policy: BMP characters without a glyph substitute `?`; non-BMP characters and unpaired surrogate code points are rejected until the protocol's UTF-16 glyph semantics are verified.
 - [x] Validate multi-character native text (`HELLO`) with captured glyphs on hardware.
 - [x] Validate native text color and a scroll effect (`HELLO`, red, scroll) on hardware.
-- [x] Implement GIF/multi-frame loading, frame sampling, shared-delay animation packets, and receive-capacity guardrails; per-frame timing is not representable in the observed protocol. A slow two-frame outline animation was visually confirmed; avoid rapid/full-screen flashing.
+- [x] Implement GIF/multi-frame loading, shared-delay animation packets, and receive-capacity guardrails; retain every frame that fits, otherwise evenly sample the largest frame count that fits. Per-frame timing is not representable in the observed protocol. A slow two-frame outline animation was visually confirmed; avoid rapid/full-screen flashing.
 - [x] Physically validate Python GIF sending with `gators.gif`: SpotLED visibly animated the sampled two-frame transfer at 250 ms/frame. User noted rendering differs slightly from the phone GIF, expected with two-frame sampling and 64×16 rasterization.
 - [x] Centralize BLE discovery/connection, allow `--device-name`, and provide contextual discovery/connection/query/transfer timeout errors. Do not automatically retry transfers after a possible payload acceptance.
 - [x] Retry read-only screen/capability queries once after timeout; never retry rejected queries or content transfers automatically.
@@ -118,6 +127,7 @@
 - [x] Add tested row-major rotation plus `contain`, `cover`, and `stretch` choices; retry Android writes only when GATT explicitly reports status 201 (busy).
 - [x] Build and install/launch the debug app on the selected Pixel 6a.
 - [x] Build and verify a signed internal-sideload release APK for contributor review; it uses the local debug signer, not a production key.
+- [x] Publish v0.15.0 with the animated GIF preview and shared Python library changes.
 - [x] Create `plughie/SpotLED-Suite`, push the project and signed v0.12.0 `SpotLED-Companion.apk` release, scrub installation-specific values from history, and make the repository public.
 - [x] Add the project attributions to the Android About panel and publish the updated v0.12.1 companion APK.
 - [x] User confirms the About panel and attributions on the Android phone.
@@ -142,3 +152,21 @@
 - [ ] Freeze shared protocol test vectors and transfer behavior for cross-platform parity.
 - [ ] Implement the corresponding iPhone app with Bluetooth discovery, permissions, connection lifecycle, content preview, image/text rotation, and transfer feedback.
 - [ ] Validate both apps against the same hardware test patterns and text cases.
+
+## Wishlist — defer until current priorities are complete
+
+Ideas from the colleague's `sign-ideas` notes. The app icon, appearance themes, native/raster switch, and text-speed setting are already implemented and are not repeated here.
+
+- Add a timed push/schedule mode for refreshing and displaying updates such as time and weather.
+- Read a user-selected `.txt` file as a playlist, with per-line text, color, and display duration.
+- Follow a changing text/log file and display its head or tail, with a configurable line count and scroll speed.
+- Add optional background delivery for scheduled updates using a user-visible, controllable foreground mode; avoid an indefinite hidden wake lock and preserve the current manual MQTT start/stop behavior.
+- Add persistent status-pixel indicators for weather freshness, MQTT state, and network/ping reachability; define how indicators compose with incoming content.
+- Register as an Android Share target for images and text.
+- Add opt-in, per-app Android notification forwarding using the platform notification-listener permission. Request source/permission from the AWTRIX Notify author rather than copying code from a decompile.
+- Offer a small authenticated HTTPS control endpoint for local apps and agents, with explicit access controls and no unauthenticated commands.
+- Add optional NOAA weather lookup by ZIP/postal code, coordinated with the existing MQTT weather path.
+- Explore a two-line text layout and a modular screen split for persistent time/weather plus a scrolling-message area, within the 64×16 panel limits.
+- Add image crop/viewport selection to choose which region is fitted to the display.
+- Use original or permissively licensed pixel-art assets; do not copy AWTRIX artwork without compatible reuse rights.
+- Explore a localized, non-flashing attention animation (such as a line or outline). Full-panel white on/off strobing remains out of scope because rapid full-frame flashing is not acceptable.

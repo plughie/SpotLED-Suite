@@ -5,16 +5,15 @@ from __future__ import annotations
 
 import asyncio
 import colorsys
-import importlib.util
 import json
 import logging
 import os
 import signal
-import sys
 from collections import deque
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
+
+from spotled_common import send_text, text_effect_mode, text_render_mode, text_speed_ms
 
 try:
     import paho.mqtt.client as mqtt
@@ -168,28 +167,6 @@ def format_weather(weather: Weather, unit: str = "F") -> str:
     return f"{temp} {condition}"[:160]
 
 
-def text_effect_mode(name: str) -> int:
-    effects = {
-        "slide": 0, "up": 1, "down": 2, "left": 3,
-        "right": 4, "snow": 5, "scroll": 6, "laser": 7,
-    }
-    try:
-        return effects[name.lower()]
-    except (AttributeError, KeyError):
-        raise ValueError("SPOTLED_TEXT_EFFECT must be slide, up, down, left, right, snow, scroll, or laser")
-
-
-def load_sender():
-    sender_path = Path(__file__).resolve().parents[1] / "SPOTLED-v3.py"
-    spec = importlib.util.spec_from_file_location("spotled_reference_sender", sender_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load SpotLED sender: {sender_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 class SpotLedMqttService:
     def __init__(self) -> None:
         self.host = os.environ.get("MQTT_HOST", "").strip()
@@ -206,12 +183,16 @@ class SpotLedMqttService:
             raise ValueError("WEATHER_UNIT must be F or C")
         self.text_effect = os.environ.get("SPOTLED_TEXT_EFFECT", "left").lower()
         self.text_effect_mode = text_effect_mode(self.text_effect)
+        try:
+            self.text_mode = text_render_mode(os.environ.get("SPOTLED_TEXT_MODE", "native"))
+            self.text_time_ms = text_speed_ms(os.environ.get("SPOTLED_TEXT_SPEED", "normal"))
+        except ValueError as exc:
+            raise ValueError(f"Invalid SpotLED text setting: {exc}") from exc
         self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=100)
         self.latest_weather: Weather | None = None
         self.weather_ready = asyncio.Event()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.client = None
-        self.sender = load_sender()
 
     def _threadsafe_enqueue(self, item: Any) -> None:
         if self.loop is None:
@@ -273,8 +254,9 @@ class SpotLedMqttService:
     async def _send(self, text: str, color: tuple[int, int, int]) -> None:
         LOG.info("Sending to %s with %s effect: %s", self.device_name,
                  self.text_effect, text)
-        await self.sender.main(
-            text, color=color, mode=self.text_effect_mode, device_name=self.device_name
+        await send_text(
+            text, color=color, mode=self.text_effect_mode, device_name=self.device_name,
+            text_mode=self.text_mode, time_ms=self.text_time_ms
         )
 
     async def _show_weather(self) -> None:

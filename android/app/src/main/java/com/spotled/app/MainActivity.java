@@ -18,6 +18,8 @@ import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.util.TypedValue;
 import android.view.View;
@@ -53,6 +55,23 @@ public final class MainActivity extends Activity {
     private Spinner textColorSpinner;
     private ImageView preview;
     private SpotLedBleClient ble;
+    private final Handler previewHandler = new Handler(Looper.getMainLooper());
+    private Bitmap[] animatedPreviewFrames;
+    private int animatedPreviewIntervalMs;
+    private int animatedPreviewFrameIndex;
+    private boolean activityResumed;
+    private boolean previewAnimationScheduled;
+    private final Runnable previewAnimationTick = new Runnable() {
+        @Override public void run() {
+            previewAnimationScheduled = false;
+            if (!activityResumed || preview == null || animatedPreviewFrames == null
+                    || animatedPreviewFrames.length < 2) return;
+            animatedPreviewFrameIndex = (animatedPreviewFrameIndex + 1)
+                    % animatedPreviewFrames.length;
+            preview.setImageBitmap(animatedPreviewFrames[animatedPreviewFrameIndex]);
+            startAnimatedPreview();
+        }
+    };
 
     @Override protected void onCreate(Bundle state) {
         applyStoredTheme();
@@ -177,7 +196,7 @@ public final class MainActivity extends Activity {
         page.addView(preview, previewParams);
 
         TextView note = new TextView(this);
-        note.setText("The preview is 64×16. GIF previews show the first frame; animated GIFs send two sampled frames at a safe pace, limited by the display's packet size. Transfers replace the display. BLE connects only during a send; an acknowledgment confirms receipt, not rendering.");
+        note.setText("The preview is 64×16. GIF previews animate the same two sampled frames sent to the display at a safe pace, limited by the display's packet size. Transfers replace the display. BLE connects only during a send; an acknowledgment confirms receipt, not rendering.");
         note.setTextSize(13);
         note.setPadding(0, dp(12), 0, 0);
         page.addView(note);
@@ -337,6 +356,7 @@ public final class MainActivity extends Activity {
                 .getBoolean(PREF_RASTER_TEXT, false);
         int rotationDegrees = rotationSpinner.getSelectedItemPosition() * 90;
         if (TextOutputMode.useNativeText(rasterText, rotationDegrees)) {
+            clearAnimatedPreview();
             preview.setImageBitmap(renderNativeTextPreview(message, textColorSpinner.getSelectedItemPosition()));
             if (ble.hasSelectedDevice()) {
                 statusView.setText("Sending text with the display's native font and "
@@ -437,15 +457,18 @@ public final class MainActivity extends Activity {
 
         RgbTransforms.Frame firstFrame = transformImage(first);
         RgbTransforms.Frame secondFrame = transformImage(second);
-        preview.setImageBitmap(bitmapFromRgb(firstFrame.rgb, firstFrame.width, firstFrame.height));
+        int intervalMs = Math.max(250, Math.min(1000, duration / 2));
+        setAnimatedPreviewFrames(
+                bitmapFromRgb(firstFrame.rgb, firstFrame.width, firstFrame.height),
+                bitmapFromRgb(secondFrame.rgb, secondFrame.width, secondFrame.height),
+                intervalMs);
         if (!ble.hasSelectedDevice()) {
-            statusView.setText("GIF preview ready. Find and select a display before sending.");
+            statusView.setText("Animated GIF preview ready. Find and select a display before sending.");
             return;
         }
 
         // The tested receive buffer only fits two 64x16 RGB frames. Clamp timing to
         // 250 ms/frame so GIFs with very short source delays do not flash rapidly.
-        int intervalMs = Math.max(250, Math.min(1000, duration / 2));
         statusView.setText("Connecting briefly and sending 2 sampled GIF frames at "
                 + intervalMs + " ms/frame…");
         ble.sendRgbAnimation(new byte[][] {firstFrame.rgb, secondFrame.rgb},
@@ -481,6 +504,7 @@ public final class MainActivity extends Activity {
         RgbTransforms.Frame fitted = transformImage(
                 bitmapFromRgb(sourceRgb, sourceWidth, sourceHeight));
         Bitmap previewBitmap = bitmapFromRgb(fitted.rgb, fitted.width, fitted.height);
+        clearAnimatedPreview();
         preview.setImageBitmap(previewBitmap);
         if (ble.hasSelectedDevice()) {
             statusView.setText(effectMode == 0
@@ -512,7 +536,47 @@ public final class MainActivity extends Activity {
         return Bitmap.createBitmap(argb, width, height, Bitmap.Config.ARGB_8888);
     }
 
+    private void setAnimatedPreviewFrames(Bitmap first, Bitmap second, int intervalMs) {
+        clearAnimatedPreview();
+        animatedPreviewFrames = new Bitmap[] {first, second};
+        animatedPreviewIntervalMs = Math.max(250, Math.min(1000, intervalMs));
+        animatedPreviewFrameIndex = 0;
+        preview.setImageBitmap(first);
+        startAnimatedPreview();
+    }
+
+    private void startAnimatedPreview() {
+        if (!activityResumed || previewAnimationScheduled || animatedPreviewFrames == null
+                || animatedPreviewFrames.length < 2) return;
+        previewAnimationScheduled = true;
+        previewHandler.postDelayed(previewAnimationTick, animatedPreviewIntervalMs);
+    }
+
+    private void stopAnimatedPreview() {
+        previewHandler.removeCallbacks(previewAnimationTick);
+        previewAnimationScheduled = false;
+    }
+
+    private void clearAnimatedPreview() {
+        stopAnimatedPreview();
+        animatedPreviewFrames = null;
+        animatedPreviewFrameIndex = 0;
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        activityResumed = true;
+        startAnimatedPreview();
+    }
+
+    @Override protected void onPause() {
+        activityResumed = false;
+        stopAnimatedPreview();
+        super.onPause();
+    }
+
     @Override protected void onDestroy() {
+        clearAnimatedPreview();
         if (ble != null) ble.close();
         super.onDestroy();
     }

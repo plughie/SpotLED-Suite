@@ -20,6 +20,9 @@ with contributions from **clavo** and **OpenAI Codex**.
 - Text uses the explicit `left` marquee effect by default; set
   `SPOTLED_TEXT_EFFECT` to `slide`, `up`, `down`, `left`, `right`, `snow`,
   `scroll`, or `laser` to select another tested protocol effect.
+- `SPOTLED_TEXT_MODE` selects `native` (default) or `raster` text rendering;
+  `SPOTLED_TEXT_SPEED` selects `slow`, `normal` (default), or `fast` (300/200/100 ms).
+  These match Android's timing choices; the user confirmed the configured MQTT speed applies to both notifications and periodic weather text.
 - `SPOTLED_DEVICE_NAME` (required): use the exact advertised name shown during
   display startup: `SpotLED_` followed by the four-character hexadecimal ID,
   for example `SpotLED_AB12`.
@@ -44,23 +47,22 @@ python3 -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-Replace the placeholder values with your broker address, MQTT topics, and BLE
-advertised display name. The service requires these settings and does not
-contain installation-specific defaults. Never put broker passwords in source
-control.
+The requirements install the parent repository's editable `spotled_common`
+package so the bridge uses the same sender, effect mapping, text modes, and
+timing implementation as the CLI.
+
+Create a local `env.sh` in this directory with your installation's settings.
+The file is git-ignored so broker details and credentials stay out of source
+control. For example:
 
 ```sh
-export MQTT_HOST="your-broker-host"
-export MQTT_PORT=1883
-export MQTT_USERNAME=""
-export MQTT_PASSWORD=""
-export MQTT_NOTIFY_TOPIC="<awtrix-prefix>/cmd/notify"
-export MQTT_WEATHER_TOPIC="<weather-state-topic>"
-export SPOTLED_DEVICE_NAME="SpotLED_AB12"
-export WEATHER_INTERVAL_SECONDS=900
-export SPOTLED_TEXT_EFFECT=left
+cp env.sh.example env.sh
+. ./env.sh
 python spotled_mqtt.py
 ```
+
+Edit the copied `env.sh` with your local values before sourcing it. The example
+file is generic; never put passwords or other local-only values in it.
 
 For anonymous MQTT, leave username and password empty. Set `MQTT_TLS=true` for
 TLS. `WEATHER_UNIT=C` changes the weather label to Celsius; Fahrenheit is the
