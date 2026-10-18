@@ -1,5 +1,6 @@
 package com.spotled.app;
 
+import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
@@ -30,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Minimal BLE discovery, connection, and acknowledged SetData transport. */
+@SuppressLint("MissingPermission") // Activity/service callers gate BLE use on their runtime permission checks.
 final class SpotLedBleClient {
     interface Listener {
         void onStatus(String message);
@@ -58,6 +60,7 @@ final class SpotLedBleClient {
     private volatile BluetoothGattCharacteristic dataCharacteristic;
     private volatile int mtu = 23;
     private volatile boolean ready;
+    private volatile boolean lastTransferAcknowledged;
     private volatile String connectedName = "SpotLED";
     private volatile FoundDevice selectedDevice;
     private BluetoothLeScanner scanner;
@@ -119,6 +122,8 @@ final class SpotLedBleClient {
 
     boolean isReady() { return ready; }
     boolean hasSelectedDevice() { return selectedDevice != null; }
+    boolean isTransferInProgress() { return transferInProgress.get(); }
+    boolean wasLastTransferAcknowledged() { return lastTransferAcknowledged; }
 
     boolean restoreSelectedDevice(String name, String address) {
         if (!matchesSpotLedName(name) || address == null
@@ -324,6 +329,15 @@ final class SpotLedBleClient {
     }
 
     void sendNativeText(String text, int paletteIndex, int effectMode, int timeMs) {
+        sendNativeTextInternal(text, paletteIndex, null, effectMode, timeMs);
+    }
+
+    void sendNativeTextSolidColor(String text, int argb, int effectMode, int timeMs) {
+        sendNativeTextInternal(text, 0, argb, effectMode, timeMs);
+    }
+
+    private void sendNativeTextInternal(String text, int paletteIndex, Integer solidColor,
+                                        int effectMode, int timeMs) {
         FoundDevice target = selectedDevice;
         if (target == null) {
             status("Find and select a SpotLED display before sending.");
@@ -333,11 +347,13 @@ final class SpotLedBleClient {
             status("A transfer is already in progress.");
             return;
         }
+        lastTransferAcknowledged = false;
         new Thread(() -> {
             boolean transferAcknowledged = false;
             try {
-                byte[][] payloads = SpotLedProtocol.buildNativeTextTransfers(
-                        text, paletteIndex, effectMode, timeMs);
+                byte[][] payloads = solidColor == null
+                        ? SpotLedProtocol.buildNativeTextTransfers(text, paletteIndex, effectMode, timeMs)
+                        : SpotLedProtocol.buildNativeTextTransfersSolidColor(text, solidColor, effectMode, timeMs);
                 connectForTransfer(target);
                 writeCommand(SpotLedProtocol.buildNativeTextSetupPlaylist());
                 Thread.sleep(200);
@@ -348,6 +364,7 @@ final class SpotLedBleClient {
             } catch (Exception exception) {
                 status("Send failed: " + (exception.getMessage() == null ? exception : exception.getMessage()));
             } finally {
+                lastTransferAcknowledged = transferAcknowledged;
                 disconnectTransport();
                 transferInProgress.set(false);
                 if (transferAcknowledged)
@@ -367,6 +384,7 @@ final class SpotLedBleClient {
             status("A transfer is already in progress.");
             return;
         }
+        lastTransferAcknowledged = false;
         new Thread(() -> {
             boolean transferAcknowledged = false;
             try {
@@ -380,6 +398,7 @@ final class SpotLedBleClient {
             } catch (Exception exception) {
                 status("Send failed: " + (exception.getMessage() == null ? exception : exception.getMessage()));
             } finally {
+                lastTransferAcknowledged = transferAcknowledged;
                 disconnectTransport();
                 transferInProgress.set(false);
                 if (transferAcknowledged) {

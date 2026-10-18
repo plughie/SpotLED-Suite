@@ -1,9 +1,10 @@
 import asyncio
 import unittest
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -11,10 +12,18 @@ from spotled_mqtt import (
     Notification,
     SpotLedMqttService,
     Weather,
+    format_clocktemp,
     format_weather,
+    noaa_observation_url,
     parse_color,
+    parse_clocktemp_indoor,
     parse_notification,
+    parse_noaa_observation,
     parse_weather,
+    parse_speed,
+    render_clocktemp_frame,
+    seconds_until_next_minute,
+    seconds_until_next_quarter_hour,
     text_effect_mode,
     weather_color,
 )
@@ -55,13 +64,98 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual(parse_weather('{"temp":72,"cond":null}'), Weather(72.0, "unknown"))
         self.assertIsNone(parse_weather("unavailable"))
 
+    def test_noaa_latest_observation_converts_temperature_and_maps_condition(self):
+        weather = parse_noaa_observation(
+            '{"properties":{"temperature":{"value":10},"textDescription":"Light Rain"}}'
+        )
+        self.assertEqual(weather, Weather(50.0, "rainy"))
+        self.assertEqual(parse_noaa_observation(
+            '{"properties":{"temperature":{"value":0},"textDescription":"Thunderstorms"}}'
+        ), Weather(32.0, "lightning-rainy"))
+        self.assertIsNone(parse_noaa_observation('{"properties":{}}'))
+
+    def test_noaa_station_url_uses_latest_observation_endpoint(self):
+        self.assertEqual(
+            noaa_observation_url("KSFO"),
+            "https://api.weather.gov/stations/KSFO/observations/latest",
+        )
+
+    def test_noaa_station_setting_is_normalized_and_validated(self):
+        with patch.dict("os.environ", {"NOAA_WEATHER_STATION": "ksfo"}):
+            self.assertEqual(SpotLedMqttService(weather_source="noaa").noaa_station, "KSFO")
+        with patch.dict("os.environ", {"NOAA_WEATHER_STATION": "bad/station"}):
+            with self.assertRaisesRegex(ValueError, "NOAA_WEATHER_STATION"):
+                SpotLedMqttService(weather_source="noaa")
+
+    def test_clocktemp_indoor_celsius_converts_and_speed_payload_parses(self):
+        self.assertAlmostEqual(parse_clocktemp_indoor('{"temperature":21}', "F"), 69.8)
+        self.assertEqual(parse_clocktemp_indoor('{"temperature":21}', "C"), 21)
+        self.assertEqual(parse_speed(b"425.5"), 425.5)
+        self.assertIsNone(parse_speed(b"unavailable"))
+
+    def test_clock_status_includes_date_time_indoor_outdoor_condition_and_speed(self):
+        message = format_clocktemp(
+            datetime(2026, 10, 18, 12, 5), 70,
+            Weather(68, "partlycloudy"), 425,
+        )
+        self.assertEqual(message, "10/18  12:05  IN 70F  OUT 68F  PARTLY  NET 425M")
+
+    def test_clocktemp_raster_frame_contains_bitmap_icon_text_and_throughput_bar(self):
+        now = datetime(2026, 10, 18, 12, 5)
+        sunny = render_clocktemp_frame(now, 70, Weather(68, "sunny"), 500)
+        rainy = render_clocktemp_frame(now, 70, Weather(68, "rainy"), 500)
+        no_speed = render_clocktemp_frame(now, 70, Weather(68, "sunny"), None)
+        no_weather = render_clocktemp_frame(now, 70, None, 500)
+        self.assertEqual(len(sunny), 64 * 16 * 3)
+        self.assertNotEqual(sunny, rainy)
+        self.assertNotEqual(sunny, no_speed)
+        icon_start = 59 * 3
+        icon_end = (5 * 64 + 64) * 3
+        self.assertNotEqual(sunny[icon_start:icon_end], no_weather[icon_start:icon_end])
+        bottom_row = 15 * 64 * 3
+        self.assertTrue(any(sunny[bottom_row:bottom_row + 32 * 3]))
+        self.assertEqual(sunny[bottom_row + 40 * 3:bottom_row + 41 * 3], b"\0\0\0")
+
+    def test_clock_scheduler_targets_minute_and_quarter_hour_boundaries(self):
+        self.assertEqual(seconds_until_next_minute(datetime(2026, 1, 1, 12, 34, 15)), 45)
+        self.assertEqual(seconds_until_next_quarter_hour(datetime(2026, 1, 1, 12, 14, 30)), 30)
+        self.assertEqual(seconds_until_next_quarter_hour(datetime(2026, 1, 1, 12, 30)), 900)
+        self.assertEqual(seconds_until_next_quarter_hour(datetime(2026, 1, 1, 12, 59, 30)), 30)
+
+    def test_weather_scheduler_fetches_at_startup_then_waits_for_quarter_hour(self):
+        service = SpotLedMqttService(weather_source="noaa")
+        service._now = lambda: datetime(2026, 1, 1, 12, 14, 30)
+        service._refresh_noaa = AsyncMock()
+        with patch("spotled_mqtt.asyncio.sleep",
+                   new=AsyncMock(side_effect=asyncio.CancelledError)) as sleep:
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(service._weather_schedule())
+        service._refresh_noaa.assert_awaited_once()
+        sleep.assert_awaited_once_with(30)
+
+    def test_clock_scheduler_fetches_indoor_on_startup_and_waits_to_minute(self):
+        service = SpotLedMqttService()
+        service._now = lambda: datetime(2026, 1, 1, 12, 34, 15, 500_000)
+        service._refresh_indoor_temperature = AsyncMock()
+        service._threadsafe_enqueue = Mock()
+        with patch("spotled_mqtt.asyncio.sleep",
+                   new=AsyncMock(side_effect=asyncio.CancelledError)) as sleep:
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(service._clock_schedule())
+        service._refresh_indoor_temperature.assert_awaited_once()
+        service._threadsafe_enqueue.assert_called_once()
+        sleep.assert_awaited_once_with(44.5)
+
     def test_weather_color_matches_wetter_temperature_ramp_endpoints(self):
         self.assertEqual(weather_color(10.4), (217, 119, 223))  # -12 C
         self.assertEqual(weather_color(100.4), (161, 37, 39))  # 38 C
 
-    def test_default_service_scroll_is_explicit_left_marquee(self):
-        self.assertEqual(text_effect_mode("left"), 3)
+    def test_default_notification_effect_is_prominent_scroll(self):
         self.assertEqual(text_effect_mode("scroll"), 6)
+        with patch.dict("os.environ", {}, clear=True):
+            service = SpotLedMqttService()
+        self.assertEqual(service.text_effect, "scroll")
+        self.assertEqual(service.text_effect_mode, 6)
         with self.assertRaises(ValueError):
             text_effect_mode("wipe")
 
@@ -79,7 +173,7 @@ class PayloadTests(unittest.TestCase):
 
             asyncio.run(send_notification())
         fake_sender.main.assert_awaited_once_with(
-            "HELLO", color=(255, 0, 0), mode=3, device_name="",
+            "HELLO", color=(255, 0, 0), mode=6, device_name="",
             text_mode="raster", time_ms=100,
         )
 
@@ -89,6 +183,41 @@ class PayloadTests(unittest.TestCase):
                     "SPOTLED_TEXT_SPEED": preset}):
                 service = SpotLedMqttService()
                 self.assertEqual(service.text_time_ms, expected_ms)
+
+    def test_home_assistant_source_subscribes_weather_and_speed_and_applies_payload(self):
+        with patch.dict("os.environ", {
+                "MQTT_WEATHER_TOPIC": "weather/state",
+                "MQTT_SPEED_TOPIC": "speed/results",
+        }):
+            service = SpotLedMqttService(weather_source="homeassistant")
+        client = Mock()
+        service._on_connect(client, None, None, SimpleNamespace(is_failure=False), None)
+        subscriptions = client.subscribe.call_args.args[0]
+        self.assertIn((service.weather_topic, 0), subscriptions)
+        self.assertIn((service.speed_topic, 0), subscriptions)
+
+        service._threadsafe_enqueue = Mock()
+        message = SimpleNamespace(
+            topic=service.weather_topic,
+            payload=b'{"temp":72,"cond":"partlycloudy"}',
+        )
+        service._on_message(None, None, message)
+        self.assertEqual(service.latest_weather, Weather(72.0, "partlycloudy"))
+        service._threadsafe_enqueue.assert_called_once()
+
+    def test_noaa_source_omits_home_assistant_speed_bar(self):
+        with patch.dict("os.environ", {"MQTT_SPEED_TOPIC": "speed/results"}):
+            service = SpotLedMqttService(weather_source="noaa")
+        client = Mock()
+        service._on_connect(client, None, None, SimpleNamespace(is_failure=False), None)
+        subscriptions = client.subscribe.call_args.args[0]
+        self.assertNotIn((service.speed_topic, 0), subscriptions)
+        service.latest_speed_mbps = 900
+        service.latest_weather = Weather(60, "cloudy")
+        with patch("spotled_mqtt.send_rgb_frame", new=AsyncMock()) as sender:
+            asyncio.run(service._show_clock())
+        pixels = sender.await_args.args[0]
+        self.assertEqual(pixels[15 * 64 * 3:16 * 64 * 3], bytes(64 * 3))
 
 
 if __name__ == "__main__":

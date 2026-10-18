@@ -2,6 +2,14 @@
 
 ## P1 — Android app polish
 
+- [x] Add an Android-only foreground clock/weather/MQTT service with explicit start/stop controls and a persistent notification; keep it out of the planned iOS app scope.
+- [x] Add NOAA/NWS station and Home Assistant retained-weather choices, optional indoor-temperature polling, MQTT Scroll alerts, and a Home Assistant-only speed bar.
+- [x] Allow NOAA clock/weather to run with every MQTT field blank; keep broker/weather-topic requirements for Home Assistant mode and make AWTRIX alerts optional.
+- [x] Validate Android MQTT notification receipt after matching TLS to the broker's plain MQTT port (1883).
+- [ ] Validate service start/stop, weather source selection, and periodic clock display on the Pixel/SpotLED.
+- [x] Add opt-in Android notification forwarding from a user-selected app allowlist through the foreground service's Scroll alert path; check and request Android Notification Access.
+- [x] On the Pixel, grant Notification Access, select an app, and validate phone-notification forwarding.
+
 - [x] Use the supplied SpotLED artwork as the launcher icon for adaptive and legacy Android launchers.
 - [x] Add persisted System/Light/Dark themes and a gear menu with Settings and About.
 - [x] Add a persisted native/raster text switch; keep native text as the default and require raster for rotation.
@@ -39,6 +47,11 @@
 - [x] Confirm the user-preferred explicit Scroll-left effect displays as scrolling on the SpotLED.
 - [x] User confirmed the temperature refreshed after 15 minutes.
 - [x] User confirmed `SPOTLED_TEXT_SPEED` applies to both MQTT notifications and periodic weather text.
+- [x] Make MQTT alerts use the explicit Scroll effect (mode 6) by default for a more prominent visual alert; retain configurable effects and alert lifecycle.
+- [x] Add `--weather-source noaa|homeassistant`; NOAA reads its station from `NOAA_WEATHER_STATION`, while Home Assistant uses retained `MQTT_WEATHER_TOPIC` updates.
+- [x] Keep the speed bar enabled only with the Home Assistant source; NOAA mode omits it.
+- [ ] Set the NOAA station identifier and validate NOAA observations plus the raster status display on-device.
+- [ ] Validate the Home Assistant retained weather source and speed bar on-device.
 - [x] Scrub machine-specific broker/topic/device/readout values from GitHub-facing documentation and require MQTT/device settings through environment variables.
 - [x] Keep SpotLED-MQTT manually started to avoid contention with the companion app; do not configure auto-start.
 - [ ] Decide whether unsupported AWTRIX icon/sound behavior needs an alternate SpotLED approximation.
@@ -176,9 +189,8 @@ Ideas from the colleague's `sign-ideas` notes. The app icon, appearance themes, 
 - Add optional background delivery for scheduled updates using a user-visible, controllable foreground mode; avoid an indefinite hidden wake lock and preserve the current manual MQTT start/stop behavior.
 - Add persistent status-pixel indicators for weather freshness, MQTT state, and network/ping reachability; define how indicators compose with incoming content.
 - Register as an Android Share target for images and text.
-- Add opt-in, per-app Android notification forwarding using the platform notification-listener permission. Request source/permission from the AWTRIX Notify author rather than copying code from a decompile.
 - Offer a small authenticated HTTPS control endpoint for local apps and agents, with explicit access controls and no unauthenticated commands.
-- Add optional NOAA weather lookup by ZIP/postal code, coordinated with the existing MQTT weather path.
+- Add optional NOAA station discovery by ZIP/postal code so users do not need to look up a station ID manually.
 - Explore a two-line text layout and a modular screen split for persistent time/weather plus a scrolling-message area, within the 64×16 panel limits.
 - Add image crop/viewport selection to choose which region is fitted to the display.
 - Use original or permissively licensed pixel-art assets; do not copy AWTRIX artwork without compatible reuse rights.

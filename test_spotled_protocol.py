@@ -2,6 +2,7 @@
 
 import sys
 import unittest
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -148,6 +149,27 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         first.disconnect.assert_awaited_once()
         second.connect.assert_awaited_once()
         second.disconnect.assert_awaited_once()
+
+
+class RgbFrameSenderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sends_clock_style_rgb_frame_as_one_acknowledged_image(self):
+        client = object()
+
+        @asynccontextmanager
+        async def connected(*args, **kwargs):
+            yield client
+
+        with patch.object(spotled, "connected_device", new=connected), \
+             patch.object(spotled, "query_image_capabilities", new=AsyncMock(return_value=(
+                 {"width": 64, "height": 16, "color_type": 0xff},
+                 {"storage_bytes": 16352}, 7280))), \
+             patch.object(spotled, "send_set_acknowledged", new=AsyncMock()) as transfer:
+            await spotled.send_rgb_frame(bytes(64 * 16 * 3), frame_time_ms=1000)
+
+        transfer.assert_awaited_once()
+        self.assertIs(transfer.await_args.args[0], client)
+        self.assertEqual(transfer.await_args.args[1], 0x8004)
+        self.assertLessEqual(len(transfer.await_args.args[2]), 7280)
 
 
 class ReadRetryTests(unittest.IsolatedAsyncioTestCase):

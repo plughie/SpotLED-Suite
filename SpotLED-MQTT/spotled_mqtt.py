@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
-"""Bridge AWTRIX-NG MQTT notifications and Home Assistant weather to SpotLED."""
+"""Bridge AWTRIX-NG notifications and ClockTemp002-style status to SpotLED."""
 
 from __future__ import annotations
 
 import asyncio
+import argparse
 import colorsys
 import json
 import logging
 import os
+import re
 import signal
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from spotled_common import send_text, text_effect_mode, text_render_mode, text_speed_ms
+from spotled_common import send_rgb_frame, send_text, text_effect_mode, text_render_mode, text_speed_ms
+from spotled_common.font3x5 import FONT3X5
 
 try:
     import paho.mqtt.client as mqtt
@@ -22,7 +29,7 @@ except ImportError:  # Keep pure parsing helpers importable for tests.
 
 LOG = logging.getLogger("spotled_mqtt")
 DISMISS = object()
-WEATHER_REFRESH = object()
+CLOCK_REFRESH = object()
 
 
 @dataclass(frozen=True)
@@ -126,6 +133,223 @@ def parse_weather(payload: bytes | str) -> Weather | None:
         return None
 
 
+def _noaa_condition(description: str) -> str:
+    text = description.lower()
+    if any(word in text for word in ("thunder", "lightning")):
+        return "lightning-rainy"
+    if "snow" in text or "blizzard" in text or "flurr" in text:
+        return "snowy"
+    if any(word in text for word in ("rain", "shower", "drizzle")):
+        return "pouring" if any(word in text for word in ("heavy", "downpour")) else "rainy"
+    if any(word in text for word in ("fog", "mist", "haze")):
+        return "fog"
+    if "partly" in text or "few clouds" in text:
+        return "partlycloudy"
+    if any(word in text for word in ("cloud", "overcast")):
+        return "cloudy"
+    if any(word in text for word in ("clear", "sunny", "fair")):
+        return "sunny"
+    return "unknown"
+
+
+def parse_noaa_observation(payload: bytes | str) -> Weather | None:
+    """Parse a NOAA/NWS latest observation; API temperatures are Celsius."""
+    try:
+        data = json.loads(payload)
+        properties = data["properties"]
+        temperature_c = float(properties["temperature"]["value"])
+        description = properties.get("textDescription", "")
+        if not isinstance(description, str) or not (-100 <= temperature_c <= 70):
+            return None
+        return Weather(temperature_c * 1.8 + 32, _noaa_condition(description))
+    except (TypeError, ValueError, KeyError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def parse_clocktemp_indoor(payload: bytes | str, unit: str = "F") -> float | None:
+    """Read ClockTemp002's remote TC001 API temperature, returned in Celsius."""
+    try:
+        data = json.loads(payload)
+        if not isinstance(data, dict):
+            return None
+        temperature_c = float(data["temperature"])
+        if not (-100 <= temperature_c <= 100):
+            return None
+        return temperature_c if unit.upper() == "C" else temperature_c * 1.8 + 32
+    except (TypeError, ValueError, KeyError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def parse_speed(payload: bytes | str) -> float | None:
+    try:
+        speed = float(payload)
+        return speed if 0 <= speed <= 1_000_000 else None
+    except (TypeError, ValueError, UnicodeDecodeError, OverflowError):
+        return None
+
+
+def seconds_until_next_minute(now: datetime) -> float:
+    return 60 - now.second - now.microsecond / 1_000_000
+
+
+def seconds_until_next_quarter_hour(now: datetime) -> float:
+    next_minute = ((now.minute // 15) + 1) * 15
+    target = now.replace(second=0, microsecond=0)
+    if next_minute == 60:
+        target = (target + timedelta(hours=1)).replace(minute=0)
+    else:
+        target = target.replace(minute=next_minute)
+    return max(0.0, (target - now).total_seconds())
+
+
+def format_clocktemp(now: datetime, indoor: float | None, weather: Weather | None,
+                     speed_mbps: float | None, unit: str = "F") -> str:
+    """Text-only marquee approximation of ClockTemp002's date/clock/readings."""
+    unit = unit.upper()
+
+    def rounded(value: float) -> int:
+        return int(value + (0.5 if value >= 0 else -0.5))
+
+    parts = [f"{now.month:02d}/{now.day:02d}", f"{now.hour}:{now.minute:02d}"]
+    if indoor is not None:
+        parts.append(f"IN {rounded(indoor)}{unit}")
+    if weather is not None:
+        outdoor = weather.fahrenheit
+        if unit == "C":
+            outdoor = (outdoor - 32) / 1.8
+        condition_names = {
+            "sunny": "SUNNY", "clear-night": "CLEAR", "partlycloudy": "PARTLY",
+            "cloudy": "CLOUDY", "fog": "FOG", "rainy": "RAIN", "pouring": "POURING",
+            "snowy": "SNOW", "snowy-rainy": "SLEET", "hail": "HAIL",
+            "lightning": "STORM", "lightning-rainy": "STORM", "windy": "WIND",
+            "windy-variant": "WIND",
+        }
+        parts.append(f"OUT {rounded(outdoor)}{unit}")
+        parts.append(condition_names.get(weather.condition, weather.condition.upper()))
+    if speed_mbps is not None:
+        parts.append(f"NET {rounded(speed_mbps)}M")
+    return "  ".join(parts)[:160]
+
+
+def _draw_clock_text(pixels: bytearray, text: str, x: int, y: int,
+                     color: tuple[int, int, int]) -> None:
+    for index, char in enumerate(text.upper()):
+        glyph = FONT3X5.get(char, FONT3X5["?"])
+        for row, bits in enumerate(glyph):
+            for column, bit in enumerate(bits):
+                if bit == "1":
+                    px = x + index * 4 + column
+                    py = y + row
+                    if 0 <= px < 64 and 0 <= py < 16:
+                        offset = (py * 64 + px) * 3
+                        pixels[offset:offset + 3] = bytes(color)
+
+
+def _clock_pixel(pixels: bytearray, x: int, y: int,
+                 color: tuple[int, int, int]) -> None:
+    if 0 <= x < 64 and 0 <= y < 16:
+        offset = (y * 64 + x) * 3
+        pixels[offset:offset + 3] = bytes(color)
+
+
+def _draw_clock_condition(pixels: bytearray, condition: str) -> None:
+    ox, oy = 59, 0
+    yellow = (255, 255, 0)
+    cloud = (102, 204, 255)
+    rain = (51, 153, 255)
+    white = (255, 255, 255)
+    if condition in {"sunny", "clear-night"}:
+        for x, y in ((2, 2), (2, 0), (2, 4), (0, 2), (4, 2),
+                     (1, 1), (3, 1), (1, 3), (3, 3)):
+            _clock_pixel(pixels, ox + x, oy + y, yellow)
+        return
+    if condition in {"lightning", "lightning-rainy"}:
+        for y in (1, 2):
+            for x in range(4):
+                _clock_pixel(pixels, ox + x, oy + y, (170, 170, 170))
+        for x, y in ((2, 3), (1, 4), (3, 3)):
+            _clock_pixel(pixels, ox + x, oy + y, yellow)
+        return
+
+    for x in range(5):
+        _clock_pixel(pixels, ox + x, oy + 2, cloud)
+        _clock_pixel(pixels, ox + x, oy + 3, cloud)
+    for x, y in ((1, 1), (2, 0), (3, 1)):
+        _clock_pixel(pixels, ox + x, oy + y, cloud)
+    if condition in {"rainy", "pouring"}:
+        _clock_pixel(pixels, ox + 1, oy + 4, rain)
+        _clock_pixel(pixels, ox + 3, oy + 4, rain)
+    elif condition in {"snowy", "snowy-rainy", "hail"}:
+        _clock_pixel(pixels, ox + 1, oy + 4, white)
+        _clock_pixel(pixels, ox + 3, oy + 4, white)
+
+
+def _clocktemp_speed_color(percent: float) -> tuple[int, int, int]:
+    percent = max(0.0, min(100.0, percent))
+    if percent <= 33.333:
+        return (255, int(percent * 128 / 33.333), 0)
+    if percent <= 66.666:
+        return (255, int(128 + (percent - 33.333) * 127 / 33.333), 0)
+    return (int(255 - (percent - 66.666) * 255 / 33.334), 255, 0)
+
+
+def render_clocktemp_frame(now: datetime, indoor: float | None, weather: Weather | None,
+                           speed_mbps: float | None, unit: str = "F",
+                           speed_max_mbps: float = 1000.0) -> bytes:
+    """Rasterize ClockTemp002's date, clock, temperatures, condition icon and speed bar."""
+    pixels = bytearray(64 * 16 * 3)
+    unit = unit.upper()
+    white = (255, 255, 255)
+    _draw_clock_text(pixels, f"{now.month:02d}/{now.day:02d}", 0, 0, white)
+    if weather is not None:
+        outdoor = weather.fahrenheit
+        if unit == "C":
+            outdoor = (outdoor - 32) / 1.8
+        _draw_clock_condition(pixels, weather.condition)
+        _draw_clock_text(pixels, f"{int(outdoor + (0.5 if outdoor >= 0 else -0.5))}{unit}",
+                         38, 9, white)
+    else:
+        _draw_clock_text(pixels, "--", 38, 9, white)
+    if indoor is not None:
+        _draw_clock_text(pixels, f"{int(indoor + (0.5 if indoor >= 0 else -0.5))}{unit}",
+                         22, 9, (0, 255, 0))
+    else:
+        _draw_clock_text(pixels, "--", 22, 9, white)
+    _draw_clock_text(pixels, f"{now.hour}:{now.minute:02d}", 0, 9, white)
+
+    # ClockTemp002 uses a red-yellow-green throughput bar on the bottom row.
+    for x in range(64):
+        _clock_pixel(pixels, x, 15, (0, 0, 0))
+    if speed_mbps is not None and speed_max_mbps > 0:
+        span = 63
+        finish = int(max(0.0, min(1.0, speed_mbps / speed_max_mbps)) * span)
+        for x in range(finish + 1):
+            _clock_pixel(pixels, x, 15, _clocktemp_speed_color(x * 100 / span))
+    return bytes(pixels)
+
+
+def noaa_observation_url(station: str) -> str:
+    return f"https://api.weather.gov/stations/{station}/observations/latest"
+
+
+def fetch_noaa_observation(station: str, timeout: float = 10.0) -> Weather | None:
+    request = Request(
+        noaa_observation_url(station),
+        headers={
+            "User-Agent": "SpotLED-Suite/https://github.com/plughie/SpotLED-Suite",
+            "Accept": "application/geo+json",
+        },
+    )
+    with urlopen(request, timeout=timeout) as response:
+        return parse_noaa_observation(response.read(64_000))
+
+
+def fetch_clocktemp_indoor(url: str, unit: str = "F", timeout: float = 5.0) -> float | None:
+    request = Request(url, headers={"User-Agent": "SpotLED-Suite/0.16"})
+    with urlopen(request, timeout=timeout) as response:
+        return parse_clocktemp_indoor(response.read(16_000), unit)
+
+
 def weather_color(fahrenheit: float) -> tuple[int, int, int]:
     """Port Wetter.ax's Celsius temperature color ramp."""
     stops = [
@@ -168,7 +392,7 @@ def format_weather(weather: Weather, unit: str = "F") -> str:
 
 
 class SpotLedMqttService:
-    def __init__(self) -> None:
+    def __init__(self, weather_source: str = "noaa") -> None:
         self.host = os.environ.get("MQTT_HOST", "").strip()
         self.port = int(os.environ.get("MQTT_PORT", "1883"))
         self.username = os.environ.get("MQTT_USERNAME", "")
@@ -176,12 +400,27 @@ class SpotLedMqttService:
         self.client_id = os.environ.get("MQTT_CLIENT_ID", "spotled-mqtt")
         self.notify_topic = os.environ.get("MQTT_NOTIFY_TOPIC", "").strip()
         self.weather_topic = os.environ.get("MQTT_WEATHER_TOPIC", "").strip()
+        self.speed_topic = os.environ.get("MQTT_SPEED_TOPIC", "").strip()
         self.device_name = os.environ.get("SPOTLED_DEVICE_NAME", "").strip()
-        self.weather_interval = max(60, int(os.environ.get("WEATHER_INTERVAL_SECONDS", "900")))
         self.weather_unit = os.environ.get("WEATHER_UNIT", "F").upper()
         if self.weather_unit not in {"F", "C"}:
             raise ValueError("WEATHER_UNIT must be F or C")
-        self.text_effect = os.environ.get("SPOTLED_TEXT_EFFECT", "left").lower()
+        if weather_source not in {"noaa", "homeassistant"}:
+            raise ValueError("weather_source must be 'noaa' or 'homeassistant'")
+        self.weather_source = weather_source
+        self.noaa_station = os.environ.get("NOAA_WEATHER_STATION", "").strip().upper()
+        if (self.weather_source == "noaa" and self.noaa_station
+                and not re.fullmatch(r"[A-Z0-9]{3,5}", self.noaa_station)):
+            raise ValueError("NOAA_WEATHER_STATION must be a 3-5 character station identifier")
+        if self.weather_source == "homeassistant" and not self.weather_topic:
+            raise ValueError("Set MQTT_WEATHER_TOPIC when using Home Assistant weather")
+        self.indoor_url = os.environ.get("CLOCKTEMP_INDOOR_URL", "").strip()
+        timezone_name = os.environ.get("CLOCK_TIMEZONE", "").strip()
+        try:
+            self.clock_timezone = ZoneInfo(timezone_name) if timezone_name else None
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"Unknown CLOCK_TIMEZONE: {timezone_name}") from exc
+        self.text_effect = os.environ.get("SPOTLED_TEXT_EFFECT", "scroll").lower()
         self.text_effect_mode = text_effect_mode(self.text_effect)
         try:
             self.text_mode = text_render_mode(os.environ.get("SPOTLED_TEXT_MODE", "native"))
@@ -190,9 +429,14 @@ class SpotLedMqttService:
             raise ValueError(f"Invalid SpotLED text setting: {exc}") from exc
         self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=100)
         self.latest_weather: Weather | None = None
-        self.weather_ready = asyncio.Event()
+        self.latest_indoor_temperature: float | None = None
+        self.latest_speed_mbps: float | None = None
+        self._noaa_config_warning_shown = False
         self.loop: asyncio.AbstractEventLoop | None = None
         self.client = None
+
+    def _now(self) -> datetime:
+        return datetime.now(self.clock_timezone) if self.clock_timezone else datetime.now().astimezone()
 
     def _threadsafe_enqueue(self, item: Any) -> None:
         if self.loop is None:
@@ -210,28 +454,39 @@ class SpotLedMqttService:
         if getattr(reason_code, "is_failure", False):
             LOG.error("MQTT connection rejected: %s", reason_code)
             return
-        topics = [
-            (self.notify_topic, 0),
-            (self.weather_topic, 1),
-            (self.notify_topic + "/dismiss", 0),
-            (self.notify_topic + "/dismiss/+", 0),
-        ]
+        topics = [(self.notify_topic, 0),
+                  (self.notify_topic + "/dismiss", 0),
+                  (self.notify_topic + "/dismiss/+", 0)]
+        if self.weather_source == "homeassistant" and self.speed_topic:
+            topics.append((self.speed_topic, 0))
+        if self.weather_source == "homeassistant":
+            topics.append((self.weather_topic, 0))
         client.subscribe(topics)
-        LOG.info("Connected to MQTT; subscribed to %s and %s", self.notify_topic, self.weather_topic)
+        extra_topics = [topic for topic in (self.speed_topic if self.weather_source == "homeassistant" else "",
+                                            self.weather_topic if self.weather_source == "homeassistant" else "")
+                        if topic]
+        LOG.info("Connected to MQTT; subscribed to notifications%s",
+                 f" and {', '.join(extra_topics)}" if extra_topics else "")
 
     def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties) -> None:
         if getattr(reason_code, "is_failure", False):
             LOG.warning("MQTT disconnected: %s; client will reconnect", reason_code)
 
     def _on_message(self, client, userdata, message) -> None:
-        if message.topic == self.weather_topic:
+        if self.weather_source == "homeassistant" and self.speed_topic and message.topic == self.speed_topic:
+            speed = parse_speed(message.payload)
+            if speed is not None:
+                self.latest_speed_mbps = speed
+                self._threadsafe_enqueue(CLOCK_REFRESH)
+            else:
+                LOG.warning("Ignoring invalid ClockTemp002 speed payload")
+        elif self.weather_source == "homeassistant" and message.topic == self.weather_topic:
             weather = parse_weather(message.payload)
             if weather is not None:
                 self.latest_weather = weather
-                if self.loop is not None:
-                    self.loop.call_soon_threadsafe(self.weather_ready.set)
+                self._threadsafe_enqueue(CLOCK_REFRESH)
             else:
-                LOG.warning("Ignoring invalid weather MQTT payload on %s", message.topic)
+                LOG.warning("Ignoring invalid Home Assistant weather payload")
         elif message.topic == self.notify_topic:
             notification = parse_notification(message.payload)
             if notification is None:
@@ -243,13 +498,74 @@ class SpotLedMqttService:
         elif message.topic.startswith(self.notify_topic + "/dismiss"):
             self._threadsafe_enqueue(DISMISS)
 
-    async def _weather_schedule(self) -> None:
-        # Show the retained MQTT weather once received, then refresh every 15 minutes.
+    async def _clock_schedule(self) -> None:
+        # ClockTemp002 polls the TC001; refresh it on startup and with each minute tick.
         while True:
-            await self.weather_ready.wait()
-            self.weather_ready.clear()
-            self._threadsafe_enqueue(WEATHER_REFRESH)
-            await asyncio.sleep(self.weather_interval)
+            await self._refresh_indoor_temperature()
+            self._threadsafe_enqueue(CLOCK_REFRESH)
+            await asyncio.sleep(seconds_until_next_minute(self._now()))
+
+    async def _weather_schedule(self) -> None:
+        if self.weather_source == "homeassistant":
+            # MQTT retained state supplies the initial value; further updates are pushed.
+            return
+        # Fetch once on startup, then on wall-clock quarter hours (00, 15, 30, 45).
+        await self._refresh_noaa()
+        while True:
+            await asyncio.sleep(seconds_until_next_quarter_hour(self._now()))
+            await self._refresh_noaa()
+
+    async def _refresh_noaa(self) -> None:
+        if not self.noaa_station:
+            if not self._noaa_config_warning_shown:
+                LOG.warning("NOAA weather is disabled; configure NOAA_WEATHER_STATION")
+                self._noaa_config_warning_shown = True
+            return
+        try:
+            weather = await asyncio.to_thread(
+                fetch_noaa_observation, self.noaa_station,
+            )
+        except HTTPError as exc:
+            LOG.warning("NOAA observation endpoint returned HTTP %d", exc.code)
+            return
+        except (URLError, TimeoutError, OSError) as exc:
+            LOG.warning("NOAA observation request failed (%s)", type(exc).__name__)
+            return
+        if weather is None:
+            LOG.warning("NOAA returned invalid or unavailable latest observation")
+            return
+        self.latest_weather = weather
+        self._threadsafe_enqueue(CLOCK_REFRESH)
+
+    async def _refresh_indoor_temperature(self) -> None:
+        if not self.indoor_url:
+            return
+        try:
+            indoor = await asyncio.to_thread(
+                fetch_clocktemp_indoor, self.indoor_url, self.weather_unit
+            )
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            LOG.warning("ClockTemp002 indoor refresh failed (%s)", type(exc).__name__)
+            return
+        if indoor is not None:
+            self.latest_indoor_temperature = indoor
+
+    async def _show_clock(self) -> None:
+        now = self._now()
+        speed = self.latest_speed_mbps if self.weather_source == "homeassistant" else None
+        status = format_clocktemp(
+            now, self.latest_indoor_temperature, self.latest_weather,
+            speed, self.weather_unit,
+        )
+        pixels = render_clocktemp_frame(
+            now, self.latest_indoor_temperature, self.latest_weather,
+            speed, self.weather_unit,
+        )
+        LOG.info("Updating ClockTemp status: %s", status)
+        await send_rgb_frame(
+            pixels, width=64, height=16, device_name=self.device_name,
+            frame_time_ms=1000,
+        )
 
     async def _send(self, text: str, color: tuple[int, int, int]) -> None:
         LOG.info("Sending to %s with %s effect: %s", self.device_name,
@@ -257,15 +573,6 @@ class SpotLedMqttService:
         await send_text(
             text, color=color, mode=self.text_effect_mode, device_name=self.device_name,
             text_mode=self.text_mode, time_ms=self.text_time_ms
-        )
-
-    async def _show_weather(self) -> None:
-        if self.latest_weather is None:
-            LOG.debug("No valid retained weather reading yet")
-            return
-        await self._send(
-            format_weather(self.latest_weather, self.weather_unit),
-            weather_color(self.latest_weather.fahrenheit),
         )
 
     async def _wait_for_notification(self, notification: Notification,
@@ -285,19 +592,19 @@ class SpotLedMqttService:
                     return item
                 pending.append(item)
             else:
-                # Coalesce repeated weather refreshes while an alert is active.
-                if WEATHER_REFRESH not in pending:
-                    pending.append(WEATHER_REFRESH)
+                # Coalesce minute/weather/speed refreshes while an alert is active.
+                if CLOCK_REFRESH not in pending:
+                    pending.append(CLOCK_REFRESH)
 
     async def _run(self) -> None:
         pending: deque[Any] = deque()
         while True:
             item = pending.popleft() if pending else await self.queue.get()
-            if item is WEATHER_REFRESH:
-                await self._show_weather()
+            if item is CLOCK_REFRESH:
+                await self._show_clock()
                 continue
             if item is DISMISS:
-                await self._show_weather()
+                await self._show_clock()
                 continue
 
             notification = item
@@ -308,19 +615,17 @@ class SpotLedMqttService:
                     LOG.exception("Could not display MQTT notification")
                 notification = await self._wait_for_notification(notification, pending)
 
-            # Like AWTRIX notifications, return to the base weather display once
+            # Like AWTRIX notifications, return to the base ClockTemp display once
             # alerts drain. Stacked notifications run before this refresh.
             if not any(isinstance(queued, Notification) for queued in pending):
-                pending = deque(item for item in pending if item is not WEATHER_REFRESH)
-                await self._show_weather()
+                pending = deque(item for item in pending if item is not CLOCK_REFRESH)
+                await self._show_clock()
 
     async def run(self) -> None:
         if not self.host:
             raise RuntimeError("Set MQTT_HOST to the address of your MQTT broker")
         if not self.notify_topic:
             raise RuntimeError("Set MQTT_NOTIFY_TOPIC to your AWTRIX notification command topic")
-        if not self.weather_topic:
-            raise RuntimeError("Set MQTT_WEATHER_TOPIC to your Home Assistant weather state topic")
         if not self.device_name:
             raise RuntimeError("Set SPOTLED_DEVICE_NAME to the display's advertised name")
         if mqtt is None:
@@ -340,6 +645,7 @@ class SpotLedMqttService:
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
         LOG.info("Connecting to MQTT broker %s:%d", self.host, self.port)
+        LOG.info("Using %s weather source", self.weather_source)
         while True:
             try:
                 await asyncio.to_thread(self.client.connect, self.host, self.port, 60)
@@ -355,13 +661,15 @@ class SpotLedMqttService:
             except (NotImplementedError, RuntimeError):
                 pass
         worker = asyncio.create_task(self._run(), name="spotled-display-queue")
-        scheduler = asyncio.create_task(self._weather_schedule(), name="spotled-weather-refresh")
+        clock_scheduler = asyncio.create_task(self._clock_schedule(), name="spotled-clock-refresh")
+        weather_scheduler = asyncio.create_task(self._weather_schedule(), name="spotled-weather-refresh")
         try:
             await stop_event.wait()
         finally:
             worker.cancel()
-            scheduler.cancel()
-            await asyncio.gather(worker, scheduler, return_exceptions=True)
+            clock_scheduler.cancel()
+            weather_scheduler.cancel()
+            await asyncio.gather(worker, clock_scheduler, weather_scheduler, return_exceptions=True)
             self.client.disconnect()
             self.client.loop_stop()
 
@@ -374,18 +682,24 @@ def _safe_json(payload: bytes) -> dict[str, Any]:
         return {}
 
 
-async def _main() -> None:
+async def _main(weather_source: str) -> None:
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    service = SpotLedMqttService()
+    service = SpotLedMqttService(weather_source=weather_source)
     await service.run()
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Bridge AWTRIX MQTT alerts/weather to SpotLED")
+    parser.add_argument(
+        "--weather-source", choices=("noaa", "homeassistant"), default="noaa",
+        help="weather input: NOAA latest station observation (default) or retained Home Assistant MQTT topic",
+    )
+    arguments = parser.parse_args()
     try:
-        asyncio.run(_main())
+        asyncio.run(_main(arguments.weather_source))
     except KeyboardInterrupt:
         print("SpotLED-MQTT stopped.")
     except Exception as exc:

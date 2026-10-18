@@ -7,6 +7,7 @@ from bleak import BleakClient, BleakScanner
 from .settings import (
     DEFAULT_DEVICE_NAME, TEXT_EFFECTS, TEXT_SPEEDS_MS, text_effect_mode, text_speed_ms,
 )
+from .font3x5 import FONT3X5
 
 DEVICE_NAME = DEFAULT_DEVICE_NAME
 NAMED_TEXT_COLORS = {
@@ -109,78 +110,6 @@ FONT5X7 = {int(k): v for k, v in FONT5X7.items()}
 # Independent compact raster alphabet for small-pixel rotated text. Each tuple
 # is five rows of three bits; this table is authored here, not copied from
 # AWTRIX NG's noncommercial font asset.
-FONT3X5 = {
-    "A": ("010", "101", "111", "101", "101"),
-    "B": ("110", "101", "110", "101", "110"),
-    "C": ("011", "100", "100", "100", "011"),
-    "D": ("110", "101", "101", "101", "110"),
-    "E": ("111", "100", "110", "100", "111"),
-    "F": ("111", "100", "110", "100", "100"),
-    "G": ("011", "100", "101", "101", "011"),
-    "H": ("101", "101", "111", "101", "101"),
-    "I": ("111", "010", "010", "010", "111"),
-    "J": ("001", "001", "001", "101", "010"),
-    "K": ("101", "101", "110", "101", "101"),
-    "L": ("100", "100", "100", "100", "111"),
-    "M": ("101", "111", "111", "101", "101"),
-    "N": ("101", "111", "111", "111", "101"),
-    "O": ("010", "101", "101", "101", "010"),
-    "P": ("110", "101", "110", "100", "100"),
-    "Q": ("010", "101", "101", "011", "001"),
-    "R": ("110", "101", "110", "101", "101"),
-    "S": ("011", "100", "010", "001", "110"),
-    "T": ("111", "010", "010", "010", "010"),
-    "U": ("101", "101", "101", "101", "111"),
-    "V": ("101", "101", "101", "101", "010"),
-    "W": ("101", "101", "111", "111", "101"),
-    "X": ("101", "101", "010", "101", "101"),
-    "Y": ("101", "101", "010", "010", "010"),
-    "Z": ("111", "001", "010", "100", "111"),
-    "0": ("111", "101", "101", "101", "111"),
-    "1": ("010", "110", "010", "010", "111"),
-    "2": ("110", "001", "010", "100", "111"),
-    "3": ("110", "001", "010", "001", "110"),
-    "4": ("101", "101", "111", "001", "001"),
-    "5": ("111", "100", "110", "001", "110"),
-    "6": ("011", "100", "110", "101", "010"),
-    "7": ("111", "001", "010", "010", "010"),
-    "8": ("010", "101", "010", "101", "010"),
-    "9": ("010", "101", "011", "001", "110"),
-    " ": ("000",) * 5,
-    "!": ("010", "010", "010", "000", "010"),
-    '"': ("101", "101", "000", "000", "000"),
-    "#": ("101", "111", "101", "111", "101"),
-    "$": ("011", "110", "011", "110", "110"),
-    "%": ("101", "001", "010", "100", "101"),
-    "&": ("010", "101", "010", "101", "011"),
-    "'": ("010", "010", "000", "000", "000"),
-    "@": ("010", "101", "111", "100", "011"),
-    "(": ("001", "010", "010", "010", "001"),
-    ")": ("100", "010", "010", "010", "100"),
-    "*": ("000", "101", "010", "101", "000"),
-    "+": ("000", "010", "111", "010", "000"),
-    ",": ("000", "000", "000", "010", "100"),
-    "/": ("001", "001", "010", "100", "100"),
-    ";": ("000", "010", "000", "010", "100"),
-    "<": ("001", "010", "100", "010", "001"),
-    "=": ("000", "111", "000", "111", "000"),
-    ">": ("100", "010", "001", "010", "100"),
-    "[": ("011", "010", "010", "010", "011"),
-    "\\": ("100", "100", "010", "001", "001"),
-    "]": ("110", "010", "010", "010", "110"),
-    "^": ("010", "101", "000", "000", "000"),
-    "_": ("000", "000", "000", "000", "111"),
-    "`": ("100", "010", "000", "000", "000"),
-    "{": ("001", "010", "110", "010", "001"),
-    "|": ("010", "010", "010", "010", "010"),
-    "}": ("100", "010", "011", "010", "100"),
-    "~": ("000", "010", "101", "000", "000"),
-    "?": ("110", "001", "010", "000", "010"),
-    "-": ("000", "000", "111", "000", "000"),
-    ".": ("000", "000", "000", "000", "010"),
-    ":": ("000", "010", "000", "010", "000"),
-}
-
 def check_sum(data):
     """python-spotled Utils.checkSum: twos complement if >255"""
     s = sum(data)
@@ -1093,6 +1022,31 @@ async def send_image(path, rotation=0, fit='contain', preview_path=None,
         f"Image transfer acknowledged ({width}x{height}, color=0x{screen['color_type']:02X}, "
         f"rotation={rotation}, fit={fit}, frames={frames_sent}, interval={frame_interval}ms)."
     )
+
+async def send_rgb_frame(pixels, width=64, height=16, device_name=DEVICE_NAME,
+                         frame_time_ms=1000):
+    """Send an already-rasterized static RGB frame with transfer acknowledgments."""
+    pixels = bytes(pixels)
+    if len(pixels) != width * height * 3:
+        raise ValueError("RGB byte count does not match frame dimensions")
+    if not 1 <= frame_time_ms <= 0xFFFF:
+        raise ValueError("frame_time_ms must be from 1 to 65,535")
+    async with connected_device(device_name) as client:
+        screen, capabilities, receive_capacity = await query_image_capabilities(client)
+        if (screen["width"], screen["height"]) != (width, height):
+            raise RuntimeError(
+                f"Raster dimensions {width}x{height} do not match the display "
+                f"{screen['width']}x{screen['height']}"
+            )
+        frame = build_rgb_frame(width, height, pixels)
+        animation = build_frame_animation([frame], frame_time_ms=frame_time_ms, mode=0)
+        payload = wrap_set_data(animation)
+        if len(payload) > receive_capacity:
+            raise RuntimeError("Raster frame exceeds the display receive limit")
+        if len(payload) > capabilities.get("storage_bytes", len(payload)):
+            raise RuntimeError("Raster frame exceeds the display storage limit")
+        await send_set_acknowledged(client, 0x8004, payload)
+    print(f"RGB frame transfer acknowledged ({width}x{height}).")
 
 async def send_rotated_text(text, color, rotation, fit='contain', preview_path=None,
                             raster_font='3x5', text_layout='whole',

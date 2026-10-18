@@ -51,11 +51,11 @@ final class SpotLedProtocol {
             putU16(frameContent, width);
             putU16(frameContent, height);
             frameContent.write(0x18); // 24-bit RGB
-            frameContent.writeBytes(rgb);
-            follow.writeBytes(object(0x60, frameContent.toByteArray()));
+            append(frameContent, rgb);
+            append(follow, object(0x60, frameContent.toByteArray()));
         }
-        follow.writeBytes(object(7, new byte[] {0, (byte) (intervalMs >> 8), (byte) intervalMs}));
-        follow.writeBytes(object(8, new byte[] {(byte) effectMode}));
+        append(follow, object(7, new byte[] {0, (byte) (intervalMs >> 8), (byte) intervalMs}));
+        append(follow, object(8, new byte[] {(byte) effectMode}));
         byte[] animation = objectWithFollow(11,
                 new byte[] {(byte) (frames.length >> 8), (byte) frames.length}, follow.toByteArray());
         return wrapSetData(animation, 1);
@@ -72,6 +72,17 @@ final class SpotLedProtocol {
 
     static byte[][] buildNativeTextTransfers(String text, int paletteIndex, int effectMode,
                                              int timeMs) {
+        return buildNativeTextTransfers(text, paletteIndex, effectMode, timeMs, null);
+    }
+
+    static byte[][] buildNativeTextTransfersSolidColor(String text, int argb,
+                                                        int effectMode, int timeMs) {
+        return buildNativeTextTransfers(text, 0, effectMode, timeMs, argb);
+    }
+
+    private static byte[][] buildNativeTextTransfers(String text, int paletteIndex,
+                                                     int effectMode, int timeMs,
+                                                     Integer solidColor) {
         if (text == null || text.isEmpty()) throw new IllegalArgumentException("Text must not be empty");
         if (text.length() > 160) throw new IllegalArgumentException("Text exceeds the 160-character device limit");
         if (!isNativeTextEffect(effectMode)) throw new IllegalArgumentException("Unknown native text effect");
@@ -86,7 +97,7 @@ final class SpotLedProtocol {
         ByteArrayOutputStream fonts = new ByteArrayOutputStream();
         // Match the Python sender's WordStock semantics: one font entry per character,
         // in the same order as CharacterString, including repeated characters.
-        for (int i = 0; i < text.length(); i++) fonts.writeBytes(fontObject(text.charAt(i)));
+        for (int i = 0; i < text.length(); i++) append(fonts, fontObject(text.charAt(i)));
         byte[] wordStock = objectWithFollow(5,
                 new byte[] {(byte) (text.length() >> 8), (byte) text.length()}, fonts.toByteArray());
 
@@ -96,13 +107,14 @@ final class SpotLedProtocol {
         ByteArrayOutputStream follow = new ByteArrayOutputStream();
         int[] codePoints = text.codePoints().toArray();
         for (int index = 0; index < codePoints.length; index++) {
-            int color = TextPalette.colorFor(paletteIndex, index, codePoints.length);
-            follow.writeBytes(object(2, new byte[] {(byte) (color >> 16), (byte) (color >> 8), (byte) color}));
+            int color = solidColor == null
+                    ? TextPalette.colorFor(paletteIndex, index, codePoints.length) : solidColor;
+            append(follow, object(2, new byte[] {(byte) (color >> 16), (byte) (color >> 8), (byte) color}));
             int cp = codePoints[index];
-            follow.writeBytes(object(3, new byte[] {(byte) (cp >> 8), (byte) cp}));
+            append(follow, object(3, new byte[] {(byte) (cp >> 8), (byte) cp}));
         }
-        follow.writeBytes(object(7, new byte[] {0, (byte) (timeMs >> 8), (byte) timeMs}));
-        follow.writeBytes(object(8, new byte[] {(byte) effectMode}));
+        append(follow, object(7, new byte[] {0, (byte) (timeMs >> 8), (byte) timeMs}));
+        append(follow, object(8, new byte[] {(byte) effectMode}));
         byte[] characterString = objectWithFollow(4, content.toByteArray(), follow.toByteArray());
 
         byte[] fontPayload = wrapSetData(wordStock, 1);
@@ -110,6 +122,10 @@ final class SpotLedProtocol {
         if (fontPayload.length > MAX_RECEIVE_BYTES || textPayload.length > MAX_RECEIVE_BYTES)
             throw new IllegalArgumentException("Native text exceeds the display's 7,280-byte transfer limit");
         return new byte[][] {fontPayload, textPayload};
+    }
+
+    private static void append(ByteArrayOutputStream target, byte[] bytes) {
+        target.write(bytes, 0, bytes.length);
     }
 
     private static byte[] fontObject(char ch) {

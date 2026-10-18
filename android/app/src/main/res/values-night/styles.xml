@@ -1,5 +1,5 @@
-<resources>
-    <style name="AppThemeSystem" parent="android:style/Theme.Material.NoActionBar">
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="AppThemeSystem" parent="android:style/Theme.Material.NoActionBar" tools:targetApi="27">
         <item name="android:colorAccent">@color/spotled_accent</item>
         <item name="android:statusBarColor">@color/spotled_dark_status</item>
         <item name="android:navigationBarColor">@color/spotled_dark_status</item>

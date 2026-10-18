@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothAdapter;
 import android.content.SharedPreferences;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -21,6 +22,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.View;
 import android.view.Gravity;
@@ -35,14 +37,21 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /** Android app for previewing and sending text, still images, and sampled GIF animations. */
 public final class MainActivity extends Activity {
     private static final int REQUEST_PERMISSIONS = 41;
     private static final int REQUEST_IMAGE = 42;
+    private static final int REQUEST_STATUS_PERMISSIONS = 43;
     private static final String PREFS_NAME = "spotled_settings";
     private static final String PREF_THEME = "theme";
     private static final String PREF_RASTER_TEXT = "raster_text";
@@ -66,6 +75,7 @@ public final class MainActivity extends Activity {
     private int animatedPreviewFrameIndex;
     private boolean activityResumed;
     private boolean previewAnimationScheduled;
+    private TextView notificationAccessStatus;
     private Runnable sendAfterDeviceSelection;
     private final Runnable previewAnimationTick = new Runnable() {
         @Override public void run() {
@@ -140,7 +150,13 @@ public final class MainActivity extends Activity {
 
         Button connect = new Button(this);
         connect.setText("Find and select display");
-        connect.setOnClickListener(view -> requestBluetoothPermissionsThenScan());
+        connect.setOnClickListener(view -> {
+            if (isStatusServiceEnabled()) {
+                statusView.setText("Stop the time/weather/MQTT service before using the display manually.");
+                return;
+            }
+            requestBluetoothPermissionsThenScan();
+        });
         page.addView(connect);
 
         TextView label = new TextView(this);
@@ -268,6 +284,10 @@ public final class MainActivity extends Activity {
         rasterHelp.setTextSize(13);
         content.addView(rasterHelp);
 
+        Button statusService = new Button(this);
+        statusService.setText("Time, weather & MQTT service…");
+        content.addView(statusService);
+
         Button about = new Button(this);
         about.setText("About SpotLED Companion");
         content.addView(about);
@@ -278,6 +298,10 @@ public final class MainActivity extends Activity {
                 .setPositiveButton("Done", null)
                 .setNegativeButton("Cancel", (ignored, which) -> ignored.dismiss())
                 .create();
+        statusService.setOnClickListener(view -> {
+            dialog.dismiss();
+            showStatusServiceDialog();
+        });
         about.setOnClickListener(view -> {
             dialog.dismiss();
             showAboutDialog();
@@ -298,6 +322,362 @@ public final class MainActivity extends Activity {
                     if (themeChanged) recreate();
                 }));
         dialog.show();
+    }
+
+    private void showStatusServiceDialog() {
+        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        ScrollView scroller = new ScrollView(this);
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(8), dp(20), dp(8));
+        scroller.addView(form);
+        scroller.setLayoutParams(new android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, dp(330)));
+
+        Switch enabled = new Switch(this);
+        enabled.setText("Run Android time/weather/MQTT service");
+        enabled.setChecked(preferences.getBoolean(MqttStatusService.PREF_ENABLED, false));
+        form.addView(enabled);
+        TextView explanation = new TextView(this);
+        explanation.setText("Android-only foreground service. It uses the selected SpotLED while active; manual sends are paused to prevent BLE contention. MQTT credentials are kept in app-private settings; use TLS on untrusted networks. This feature is intentionally outside the planned iOS app contract.");
+        explanation.setTextSize(13);
+        explanation.setPadding(0, dp(4), 0, dp(12));
+        form.addView(explanation);
+
+        EditText host = serviceField(form, "MQTT broker", "Host name or IP (optional for NOAA)",
+                preferences.getString(MqttStatusService.PREF_BROKER, ""),
+                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI, false);
+        EditText port = serviceField(form, "MQTT port", "1883 by default",
+                preferences.getString(MqttStatusService.PREF_PORT, "1883"),
+                android.text.InputType.TYPE_CLASS_NUMBER, false);
+        EditText username = serviceField(form, "MQTT username (optional)", "",
+                preferences.getString(MqttStatusService.PREF_USERNAME, ""),
+                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, false);
+        EditText password = serviceField(form, "MQTT password (optional)", "",
+                preferences.getString(MqttStatusService.PREF_PASSWORD, ""),
+                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD, false);
+        EditText notifyTopic = serviceField(form, "AWTRIX notification topic (optional)",
+                "Example: awtrix/cmd/notify",
+                preferences.getString(MqttStatusService.PREF_NOTIFY_TOPIC, ""),
+                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI, true);
+
+        Switch forwardPhoneNotifications = new Switch(this);
+        forwardPhoneNotifications.setText("Forward selected Android notifications");
+        forwardPhoneNotifications.setChecked(preferences.getBoolean(
+                PhoneNotificationListenerService.PREF_FORWARD_ENABLED, false));
+        form.addView(forwardPhoneNotifications);
+        TextView forwardingExplanation = new TextView(this);
+        forwardingExplanation.setText("Selected apps' notification text will scroll across the SpotLED while this service is running. Choose apps, then grant Notification Access in Android Settings.");
+        forwardingExplanation.setTextSize(13);
+        forwardingExplanation.setPadding(0, dp(2), 0, dp(6));
+        form.addView(forwardingExplanation);
+        Set<String> pendingForwardPackages = new HashSet<>(preferences.getStringSet(
+                PhoneNotificationListenerService.PREF_FORWARD_PACKAGES, Collections.emptySet()));
+        TextView selectedAppsSummary = new TextView(this);
+        updateSelectedAppsSummary(selectedAppsSummary, pendingForwardPackages.size());
+        form.addView(selectedAppsSummary);
+        Button chooseApps = new Button(this);
+        chooseApps.setText("Choose apps to forward");
+        form.addView(chooseApps);
+        chooseApps.setOnClickListener(view -> showPhoneNotificationAppPicker(
+                pendingForwardPackages, selectedAppsSummary));
+        notificationAccessStatus = new TextView(this);
+        updateNotificationAccessStatus();
+        form.addView(notificationAccessStatus);
+        Button notificationAccess = new Button(this);
+        notificationAccess.setText("Grant notification access");
+        notificationAccess.setOnClickListener(view -> openNotificationAccessSettings());
+        form.addView(notificationAccess);
+
+        Switch tls = new Switch(this);
+        tls.setText("Use MQTT over TLS");
+        tls.setChecked(preferences.getBoolean(MqttStatusService.PREF_TLS, false));
+        form.addView(tls);
+
+        addServiceLabel(form, "Weather source");
+        Spinner source = new Spinner(this);
+        source.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[] {"NOAA / NWS", "Home Assistant"}));
+        source.setSelection("homeassistant".equals(preferences.getString(
+                MqttStatusService.PREF_WEATHER_SOURCE, "noaa")) ? 1 : 0);
+        form.addView(source);
+        EditText station = serviceField(form, "NOAA station ID", "Example: KSQL",
+                preferences.getString(MqttStatusService.PREF_NOAA_STATION, ""),
+                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS, false);
+        EditText weatherTopic = serviceField(form, "Home Assistant weather topic",
+                "Retained JSON topic with temp and cond",
+                preferences.getString(MqttStatusService.PREF_HA_WEATHER_TOPIC, ""),
+                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI, true);
+        EditText speedTopic = serviceField(form, "Home Assistant speed topic (optional)",
+                "Optional Mbps topic",
+                preferences.getString(MqttStatusService.PREF_SPEED_TOPIC, ""),
+                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI, true);
+        String savedIndoorUrl = preferences.getString(MqttStatusService.PREF_INDOOR_URL, "");
+        try { savedIndoorUrl = MqttStatusService.normalizeIndoorUrl(savedIndoorUrl); }
+        catch (java.net.MalformedURLException ignored) { }
+        EditText indoorUrl = serviceField(form, "TC001 address or URL (optional)",
+                "IP only is OK; /api/v1/device is added automatically", savedIndoorUrl,
+                android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI, true);
+        EditText timezone = serviceField(form, "Clock timezone", "Blank uses phone timezone",
+                preferences.getString(MqttStatusService.PREF_TIMEZONE, ""),
+                android.text.InputType.TYPE_CLASS_TEXT, false);
+        addServiceLabel(form, "Temperature units");
+        Spinner unit = new Spinner(this);
+        unit.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[] {"Fahrenheit", "Celsius"}));
+        unit.setSelection("C".equals(preferences.getString(MqttStatusService.PREF_WEATHER_UNIT, "F")) ? 1 : 0);
+        form.addView(unit);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Time, weather & MQTT")
+                .setView(scroller)
+                .setPositiveButton("Apply", null)
+                .setNegativeButton("Cancel", null)
+                .setNeutralButton("Stop service", null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+                boolean run = enabled.isChecked();
+                String selectedSource = source.getSelectedItemPosition() == 1 ? "homeassistant" : "noaa";
+                boolean haSource = selectedSource.equals("homeassistant");
+                boolean notificationsConfigured = !serviceText(notifyTopic).isEmpty();
+                boolean mqttNeeded = haSource || notificationsConfigured;
+                boolean forwardNotifications = forwardPhoneNotifications.isChecked();
+                if (forwardNotifications && !run) {
+                    Toast.makeText(this, "Enable the foreground service to forward phone notifications.", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                if (forwardNotifications && pendingForwardPackages.isEmpty()) {
+                    Toast.makeText(this, "Choose at least one app to forward.", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                if (run && mqttNeeded && serviceText(host).isEmpty()) {
+                    Toast.makeText(this, "Enter the MQTT broker for the selected MQTT features.", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                if (run && selectedSource.equals("noaa") && serviceText(station).isEmpty()) {
+                    Toast.makeText(this, "Enter a NOAA weather station ID.", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                if (run && haSource
+                        && serviceText(weatherTopic).isEmpty()) {
+                    Toast.makeText(this, "Enter the Home Assistant weather topic.", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                if (run && mqttNeeded) {
+                    try {
+                        int mqttPort = Integer.parseInt(serviceText(port));
+                        if (mqttPort < 1 || mqttPort > 65535) throw new NumberFormatException();
+                    } catch (NumberFormatException exception) {
+                        Toast.makeText(this, "Enter an MQTT port between 1 and 65535.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                }
+                String normalizedIndoorUrl;
+                try { normalizedIndoorUrl = MqttStatusService.normalizeIndoorUrl(serviceText(indoorUrl)); }
+                catch (java.net.MalformedURLException exception) {
+                    Toast.makeText(this, "Enter a TC001 IP address or an HTTP(S) URL.", Toast.LENGTH_LONG).show();
+                    return;
+                }
+                preferences.edit()
+                        .putString(MqttStatusService.PREF_BROKER, serviceText(host))
+                        .putString(MqttStatusService.PREF_PORT, serviceText(port))
+                        .putString(MqttStatusService.PREF_USERNAME, username.getText().toString())
+                        .putString(MqttStatusService.PREF_PASSWORD, password.getText().toString())
+                        .putString(MqttStatusService.PREF_NOTIFY_TOPIC, serviceText(notifyTopic))
+                        .putBoolean(MqttStatusService.PREF_TLS, tls.isChecked())
+                        .putString(MqttStatusService.PREF_WEATHER_SOURCE, selectedSource)
+                        .putString(MqttStatusService.PREF_NOAA_STATION, serviceText(station).toUpperCase(java.util.Locale.ROOT))
+                        .putString(MqttStatusService.PREF_HA_WEATHER_TOPIC, serviceText(weatherTopic))
+                        .putString(MqttStatusService.PREF_SPEED_TOPIC, serviceText(speedTopic))
+                        .putString(MqttStatusService.PREF_INDOOR_URL, normalizedIndoorUrl)
+                        .putString(MqttStatusService.PREF_TIMEZONE, serviceText(timezone))
+                        .putString(MqttStatusService.PREF_WEATHER_UNIT, unit.getSelectedItemPosition() == 1 ? "C" : "F")
+                        .putBoolean(PhoneNotificationListenerService.PREF_FORWARD_ENABLED, forwardNotifications)
+                        .putStringSet(PhoneNotificationListenerService.PREF_FORWARD_PACKAGES,
+                                new HashSet<>(pendingForwardPackages))
+                        .putBoolean(MqttStatusService.PREF_ENABLED, run)
+                        .apply();
+                dialog.dismiss();
+                if (run) startStatusServiceWithPermissions();
+                else stopStatusService();
+            });
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
+                enabled.setChecked(false);
+                preferences.edit().putBoolean(MqttStatusService.PREF_ENABLED, false).apply();
+                dialog.dismiss();
+                stopStatusService();
+            });
+        });
+        dialog.show();
+        android.view.ViewGroup.LayoutParams scrollerParams = scroller.getLayoutParams();
+        if (scrollerParams != null) {
+            scrollerParams.height = dp(420);
+            scroller.setLayoutParams(scrollerParams);
+        }
+        if (dialog.getWindow() != null) {
+            int dialogHeight = getResources().getDisplayMetrics().heightPixels - dp(100);
+            dialog.getWindow().setLayout(dialog.getWindow().getAttributes().width, dialogHeight);
+        }
+    }
+
+    private static final class ForwardableApp {
+        final String packageName;
+        final String label;
+        ForwardableApp(String packageName, String label) {
+            this.packageName = packageName;
+            this.label = label;
+        }
+    }
+
+    private void showPhoneNotificationAppPicker(Set<String> selectedPackages, TextView summary) {
+        android.content.pm.PackageManager packageManager = getPackageManager();
+        Intent launcherIntent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> launchers = packageManager.queryIntentActivities(launcherIntent, 0);
+        ArrayList<ForwardableApp> apps = new ArrayList<>();
+        Set<String> seenPackages = new HashSet<>();
+        for (ResolveInfo info : launchers) {
+            if (info.activityInfo == null || info.activityInfo.packageName.equals(getPackageName())
+                    || !seenPackages.add(info.activityInfo.packageName)) continue;
+            String label = String.valueOf(info.loadLabel(packageManager));
+            apps.add(new ForwardableApp(info.activityInfo.packageName, label));
+        }
+        Collections.sort(apps, Comparator.comparing((ForwardableApp app) -> app.label,
+                String.CASE_INSENSITIVE_ORDER).thenComparing(app -> app.packageName));
+        if (apps.isEmpty()) {
+            Toast.makeText(this, "No launchable apps were found.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String[] labels = new String[apps.size()];
+        boolean[] checked = new boolean[apps.size()];
+        for (int i = 0; i < apps.size(); i++) {
+            labels[i] = apps.get(i).label;
+            checked[i] = selectedPackages.contains(apps.get(i).packageName);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Forward notifications from")
+                .setMultiChoiceItems(labels, checked,
+                        (dialog, which, isChecked) -> checked[which] = isChecked)
+                .setPositiveButton("Save selection", (dialog, which) -> {
+                    selectedPackages.clear();
+                    for (int i = 0; i < apps.size(); i++)
+                        if (checked[i]) selectedPackages.add(apps.get(i).packageName);
+                    updateSelectedAppsSummary(summary, selectedPackages.size());
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void updateSelectedAppsSummary(TextView view, int count) {
+        view.setText(count == 0 ? "No apps selected" : count + (count == 1 ? " app selected" : " apps selected"));
+        view.setTextSize(14);
+    }
+
+    private void updateNotificationAccessStatus() {
+        if (notificationAccessStatus == null) return;
+        notificationAccessStatus.setText(PhoneNotificationListenerService.hasNotificationAccess(this)
+                ? "Android Notification Access: enabled"
+                : "Android Notification Access: not enabled");
+        notificationAccessStatus.setTextSize(14);
+    }
+
+    private void openNotificationAccessSettings() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+        } catch (RuntimeException exception) {
+            Toast.makeText(this, "Could not open Android Notification Access settings.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private EditText serviceField(LinearLayout form, String labelText, String hint, String value,
+                                  int inputType, boolean multiline) {
+        addServiceLabel(form, labelText);
+        EditText field = new EditText(this);
+        field.setSingleLine(!multiline);
+        field.setHint(hint);
+        field.setText(value);
+        field.setTextSize(16);
+        field.setInputType(multiline
+                ? inputType | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE : inputType);
+        if (multiline) {
+            field.setMinLines(2);
+            field.setMaxLines(3);
+            field.setHorizontallyScrolling(false);
+            field.setGravity(Gravity.TOP | Gravity.START);
+        }
+        form.addView(field);
+        return field;
+    }
+
+    private static String serviceText(EditText field) {
+        return field.getText().toString().replace("\n", "").replace("\r", "").trim();
+    }
+
+    private void addServiceLabel(LinearLayout form, String text) {
+        TextView label = new TextView(this);
+        label.setText(text);
+        label.setTextSize(15);
+        label.setPadding(0, dp(10), 0, dp(2));
+        form.addView(label);
+    }
+
+    private boolean isStatusServiceEnabled() {
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(MqttStatusService.PREF_ENABLED, false);
+    }
+
+    private void startStatusServiceWithPermissions() {
+        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        if (checkSelfPermission(Manifest.permission.INTERNET) != PackageManager.PERMISSION_GRANTED) {
+            preferences.edit().putBoolean(MqttStatusService.PREF_ENABLED, false).apply();
+            new AlertDialog.Builder(this).setTitle("Allow Network access")
+                    .setMessage("Android is blocking Network access for SPOTLED Companion. NOAA weather, TC001 temperature, and MQTT all need it.")
+                    .setPositiveButton("Open app settings", (dialog, which) -> {
+                        Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", getPackageName(), null));
+                        startActivity(settings);
+                    })
+                    .setNegativeButton("Not now", null)
+                    .show();
+            return;
+        }
+        if (preferences.getString(PREF_LAST_DEVICE_ADDRESS, "").isEmpty()) {
+            preferences.edit().putBoolean(MqttStatusService.PREF_ENABLED, false).apply();
+            new AlertDialog.Builder(this).setTitle("Select a display first")
+                    .setMessage("Use Find and select display, then enable the status service.")
+                    .setPositiveButton("OK", null).show();
+            return;
+        }
+        List<String> needed = new java.util.ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 31
+                && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.BLUETOOTH_CONNECT);
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.POST_NOTIFICATIONS);
+        if (!needed.isEmpty()) {
+            requestPermissions(needed.toArray(new String[0]), REQUEST_STATUS_PERMISSIONS);
+            return;
+        }
+        Intent start = new Intent(this, MqttStatusService.class).setAction(MqttStatusService.ACTION_START);
+        try {
+            startForegroundService(start);
+            preferences.edit().putBoolean(MqttStatusService.PREF_ENABLED, true).apply();
+            Toast.makeText(this, "Time/weather/MQTT service started.", Toast.LENGTH_SHORT).show();
+            if (preferences.getBoolean(PhoneNotificationListenerService.PREF_FORWARD_ENABLED, false)
+                    && !PhoneNotificationListenerService.hasNotificationAccess(this))
+                openNotificationAccessSettings();
+        } catch (RuntimeException exception) {
+            preferences.edit().putBoolean(MqttStatusService.PREF_ENABLED, false).apply();
+            Toast.makeText(this, "Could not start the status service: " + exception.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void stopStatusService() {
+        stopService(new Intent(this, MqttStatusService.class));
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putBoolean(MqttStatusService.PREF_ENABLED, false).apply();
     }
 
     private static int textTimeMs(SharedPreferences preferences) {
@@ -332,7 +712,7 @@ public final class MainActivity extends Activity {
     private void requestBluetoothPermissionsThenScan() {
         String[] needed = Build.VERSION.SDK_INT >= 31
                 ? new String[] {Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT}
-                : new String[] {Manifest.permission.ACCESS_FINE_LOCATION};
+                : new String[] {Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION};
         for (String permission : needed) {
             if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(needed, REQUEST_PERMISSIONS);
@@ -344,6 +724,18 @@ public final class MainActivity extends Activity {
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == REQUEST_STATUS_PERMISSIONS) {
+            boolean granted = results.length > 0;
+            for (int result : results) granted &= result == PackageManager.PERMISSION_GRANTED;
+            if (granted) startStatusServiceWithPermissions();
+            else {
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                        .putBoolean(MqttStatusService.PREF_ENABLED, false).apply();
+                Toast.makeText(this, "Bluetooth and notification permissions are needed for the service.",
+                        Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
         if (requestCode == REQUEST_PERMISSIONS) {
             boolean granted = results.length > 0;
             for (int result : results) granted &= result == PackageManager.PERMISSION_GRANTED;
@@ -410,6 +802,7 @@ public final class MainActivity extends Activity {
     }
 
     private void sendTextFrame() {
+        if (requireStatusServiceStopped()) return;
         String message = textInput.getText().toString();
         if (message.trim().isEmpty()) {
             statusView.setText("Enter some text first.");
@@ -456,6 +849,7 @@ public final class MainActivity extends Activity {
     }
 
     private void openImagePicker() {
+        if (requireStatusServiceStopped()) return;
         if (Build.VERSION.SDK_INT >= 33) {
             Intent picker = new Intent(MediaStore.ACTION_PICK_IMAGES);
             picker.setType("image/*");
@@ -498,10 +892,12 @@ public final class MainActivity extends Activity {
     }
 
     private void sendBitmap(Bitmap source, int effectMode) {
+        if (requireStatusServiceStopped()) return;
         sendRgbContent(bitmapToRgb(source), source.getWidth(), source.getHeight(), effectMode);
     }
 
     private void sendGif(Movie movie) {
+        if (requireStatusServiceStopped()) return;
         int sourceWidth = movie.width();
         int sourceHeight = movie.height();
         if (sourceWidth <= 0 || sourceHeight <= 0 || (long) sourceWidth * sourceHeight > 4_000_000L) {
@@ -557,6 +953,7 @@ public final class MainActivity extends Activity {
 
     private void sendRgbContent(byte[] sourceRgb, int sourceWidth, int sourceHeight,
                                 int effectMode, int frameIntervalMs) {
+        if (requireStatusServiceStopped()) return;
         int rotation = rotationSpinner.getSelectedItemPosition() * 90;
         RgbTransforms.Frame fitted = transformImage(
                 bitmapFromRgb(sourceRgb, sourceWidth, sourceHeight));
@@ -618,6 +1015,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        updateNotificationAccessStatus();
         activityResumed = true;
         startAnimatedPreview();
     }
@@ -632,6 +1030,13 @@ public final class MainActivity extends Activity {
         clearAnimatedPreview();
         if (ble != null) ble.close();
         super.onDestroy();
+    }
+
+    private boolean requireStatusServiceStopped() {
+        if (!isStatusServiceEnabled()) return false;
+        if (statusView != null)
+            statusView.setText("Stop the time/weather/MQTT service in Settings before sending manual content.");
+        return true;
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }

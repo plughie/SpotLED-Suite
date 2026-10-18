@@ -8,6 +8,10 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import java.nio.charset.StandardCharsets;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+
 public class SpotLedProtocolTest {
     @Test public void textSpeedPresetsCoverFiveIntervals() {
         int[] expected = {300, 250, 200, 150, 100};
@@ -40,6 +44,82 @@ public class SpotLedProtocolTest {
         assertEquals(0xffff0000, TextPalette.colorFor(8, 0, 4));
         assertTrue(TextPalette.colorFor(8, 0, 4) != TextPalette.colorFor(8, 1, 4));
         assertTrue(TextPalette.colorFor(8, 1, 4) != TextPalette.colorFor(8, 2, 4));
+    }
+
+    @Test public void mqttNotificationPayloadPreservesTextColorAndQueueOptions() {
+        String payload = "{\"text\":[\"Door \",{\"text\":\"bell 🔔\"}],"
+                + "\"textColor\":\"#12AB34\",\"durationMs\":9000,\"hold\":true,\"stack\":false}";
+        MqttPayloads.Alert alert = MqttPayloads.parseAlert(payload.getBytes(StandardCharsets.UTF_8));
+        assertEquals("Door bell ?", alert.text);
+        assertEquals(0xff12ab34, alert.color);
+        assertEquals(9000, alert.durationMs);
+        assertTrue(alert.hold);
+        assertFalse(alert.stack);
+        StringBuilder longText = new StringBuilder();
+        for (int i = 0; i < 200; i++) longText.append('x');
+        MqttPayloads.Alert bounded = MqttPayloads.parseAlert(
+                ("{\"text\":\"" + longText + "\"}").getBytes(StandardCharsets.UTF_8));
+        assertEquals(154, bounded.text.length());
+    }
+
+    @Test public void mqttWeatherSourcesNormalizeNoaaAndHomeAssistantValues() {
+        String noaaPayload = "{\"properties\":{\"temperature\":{\"value\":10},"
+                + "\"textDescription\":\"Light Rain\"}}}";
+        MqttPayloads.Weather noaa = MqttPayloads.parseNoaaObservation(
+                noaaPayload.getBytes(StandardCharsets.UTF_8));
+        MqttPayloads.Weather ha = MqttPayloads.parseHomeAssistantWeather(
+                "{\"temp\":72.5,\"cond\":\"partlycloudy\"}".getBytes(StandardCharsets.UTF_8));
+        assertEquals(50f, noaa.fahrenheit, 0.01f);
+        assertEquals("rainy", noaa.condition);
+        assertEquals(72.5f, ha.fahrenheit, 0.01f);
+        assertEquals("partlycloudy", ha.condition);
+    }
+
+    @Test public void selectedPhoneNotificationsBecomeBoundedScrollingAlerts() {
+        MqttPayloads.Alert alert = MqttPayloads.phoneNotification("Messages", "Duv", "Hello there");
+        assertEquals("Messages: Duv — Hello there", alert.text);
+        assertEquals(0xffffffff, alert.color);
+        assertEquals(7_000, alert.durationMs);
+        assertTrue(alert.stack);
+        assertEquals(154, MqttPayloads.phoneNotification("App", "", "x".repeat(200)).text.length());
+        assertEquals(null, MqttPayloads.phoneNotification("", "", "  \n "));
+    }
+
+    @Test public void androidClockFrameIs64By16AndSpeedBarIsOptional() {
+        ZonedDateTime now = ZonedDateTime.of(2026, 10, 18, 15, 5, 0, 0,
+                ZoneId.of("America/Los_Angeles"));
+        MqttPayloads.Weather weather = new MqttPayloads.Weather(68, "sunny");
+        byte[] noSpeed = ClockTempRenderer.render(now, 70f, weather, null, false);
+        byte[] speed = ClockTempRenderer.render(now, 70f, weather, 500f, false);
+        assertEquals(64 * 16 * 3, noSpeed.length);
+        assertFalse(java.util.Arrays.equals(noSpeed, speed));
+        for (int i = 15 * 64 * 3; i < 16 * 64 * 3; i++) assertEquals(0, noSpeed[i]);
+    }
+
+    @Test public void mqttAlertCanUseExactRgbAndProminentScrollEffect() {
+        byte[] text = SpotLedProtocol.buildNativeTextTransfersSolidColor(
+                "A", 0xff12ab34, 6, 200)[1];
+        assertEquals(0x12, text[31] & 0xff);
+        assertEquals(0xab, text[32] & 0xff);
+        assertEquals(0x34, text[33] & 0xff);
+        assertEquals(6, text[text.length - 2] & 0xff);
+    }
+
+    @Test public void noaaClockWeatherCanRunWithAllMqttSettingsBlank() {
+        assertFalse(MqttStatusService.shouldConnectMqtt("noaa", "", ""));
+        assertFalse(MqttStatusService.shouldConnectMqtt("noaa", "broker.local", ""));
+        assertTrue(MqttStatusService.shouldConnectMqtt("noaa", "broker.local", "awtrix/cmd/notify"));
+        assertTrue(MqttStatusService.shouldConnectMqtt("homeassistant", "broker.local", ""));
+        assertFalse(MqttStatusService.shouldConnectMqtt("homeassistant", "", ""));
+    }
+
+    @Test public void tc001AddressExpandsToExpectedTemperatureEndpoint() throws Exception {
+        assertEquals("http://192.168.8.99/api/v1/device",
+                MqttStatusService.normalizeIndoorUrl("192.168.8.99"));
+        assertEquals("http://sensor.local/api/v1/device",
+                MqttStatusService.normalizeIndoorUrl("http://sensor.local/api/v1/device"));
+        assertThrows(java.net.MalformedURLException.class,
+                () -> MqttStatusService.normalizeIndoorUrl("ftp://sensor.local"));
     }
 
     @Test public void allEightSupportedEffectsUseNativeTextAndUnknownEffectIsRejected() {
