@@ -1211,7 +1211,7 @@ def parse_cli_args():
     parser.add_argument("--text-mode", choices=("native", "raster"), default="native",
                         help="native panel font or Android-style 3x5 raster text (default: native)")
     parser.add_argument("--text-speed", choices=tuple(TEXT_SPEEDS_MS), default="normal",
-                        help="text timing: slow (300 ms), normal (200 ms), or fast (100 ms)")
+                        help="text timing: slow (300 ms), 250ms, normal (200 ms), 150ms, fast (100 ms)")
     parser.add_argument("--image", help="image path (animated GIFs are sent as frame animations)")
     parser.add_argument("--device-name", default=DEVICE_NAME,
                         help=f"BLE advertised device name (default: {DEVICE_NAME})")

@@ -35,8 +35,14 @@ class CliTests(unittest.TestCase):
             args = spotled.parse_cli_args()
         self.assertEqual(args.text_mode, "raster")
         self.assertEqual(spotled.text_speed_ms(args.text_speed), 100)
+        for speed, expected in (("slow", 300), ("250ms", 250),
+                                ("normal", 200), ("150ms", 150), ("fast", 100)):
+            self.assertEqual(spotled.text_speed_ms(speed), expected)
         self.assertEqual(spotled.text_speed_ms("slow"), 300)
         self.assertEqual(spotled.text_speed_ms("normal"), 200)
+        for speed in ("150ms", "250ms"):
+            with patch.object(sys, "argv", ["SPOTLED-v3.py", "HELLO", "--text-speed", speed]):
+                self.assertEqual(spotled.parse_cli_args().text_speed, speed)
         with self.assertRaises(ValueError):
             spotled.text_speed_ms("turbo")
 

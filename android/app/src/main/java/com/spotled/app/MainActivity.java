@@ -252,8 +252,8 @@ public final class MainActivity extends Activity {
         Spinner speedSpinner = new Spinner(this);
         speedSpinner.setAdapter(new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_dropdown_item,
-                new String[] {"Slow (300 ms)", "Normal (200 ms)", "Fast (100 ms)"}));
-        speedSpinner.setSelection(nativeTextSpeedPosition(textTimeMs(preferences)));
+                TextSpeedSettings.labels()));
+        speedSpinner.setSelection(TextSpeedSettings.positionForMilliseconds(textTimeMs(preferences)));
         content.addView(speedSpinner);
 
         Switch rasterSwitch = new Switch(this);
@@ -287,7 +287,8 @@ public final class MainActivity extends Activity {
                     String selectedTheme = themeSpinner.getSelectedItemPosition() == 1 ? "light"
                             : themeSpinner.getSelectedItemPosition() == 2 ? "dark" : "system";
                     boolean themeChanged = !selectedTheme.equals(storedTheme);
-                    int textTimeMs = nativeTextTimeForPosition(speedSpinner.getSelectedItemPosition());
+                    int textTimeMs = TextSpeedSettings.millisecondsForPosition(
+                            speedSpinner.getSelectedItemPosition());
                     preferences.edit()
                             .putString(PREF_THEME, selectedTheme)
                             .putBoolean(PREF_RASTER_TEXT, rasterSwitch.isChecked())
@@ -297,18 +298,6 @@ public final class MainActivity extends Activity {
                     if (themeChanged) recreate();
                 }));
         dialog.show();
-    }
-
-    private static int nativeTextTimeForPosition(int position) {
-        if (position == 0) return 300;
-        if (position == 2) return 100;
-        return 200;
-    }
-
-    private static int nativeTextSpeedPosition(int timeMs) {
-        if (timeMs <= 150) return 2;
-        if (timeMs >= 250) return 0;
-        return 1;
     }
 
     private static int textTimeMs(SharedPreferences preferences) {

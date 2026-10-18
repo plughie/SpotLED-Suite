@@ -20,6 +20,7 @@
 - [x] Send the same raster text/effect at Slow (300 ms); BLE transfer was acknowledged.
 - [x] User confirmed raster Slow matches native Slow.
 - [x] User confirmed Fast raster is faster than Normal raster but slower than Fast native.
+- [x] Add 150 ms and 250 ms text-speed presets to the shared Python library, MQTT setting, CLI, and Android selector.
 
 ## P1 — Validate Android native marquee text
 

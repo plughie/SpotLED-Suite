@@ -9,6 +9,18 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class SpotLedProtocolTest {
+    @Test public void textSpeedPresetsCoverFiveIntervals() {
+        int[] expected = {300, 250, 200, 150, 100};
+        String[] labels = TextSpeedSettings.labels();
+        assertEquals(expected.length, labels.length);
+        for (int position = 0; position < expected.length; position++) {
+            assertEquals(expected[position], TextSpeedSettings.millisecondsForPosition(position));
+            assertEquals(position, TextSpeedSettings.positionForMilliseconds(expected[position]));
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> TextSpeedSettings.millisecondsForPosition(expected.length));
+    }
+
     @Test public void matchesSpotLedNamePrefixAndRejectsUnrelatedDevices() {
         assertTrue(SpotLedBleClient.matchesSpotLedName("SpotLED_Example"));
         assertTrue(SpotLedBleClient.matchesSpotLedName("SpotLED_OriginalContributor"));

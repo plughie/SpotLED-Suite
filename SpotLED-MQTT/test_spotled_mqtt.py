@@ -83,6 +83,13 @@ class PayloadTests(unittest.TestCase):
             text_mode="raster", time_ms=100,
         )
 
+    def test_service_accepts_intermediate_text_speed_presets(self):
+        for preset, expected_ms in (("150ms", 150), ("250ms", 250)):
+            with self.subTest(preset=preset), patch.dict("os.environ", {
+                    "SPOTLED_TEXT_SPEED": preset}):
+                service = SpotLedMqttService()
+                self.assertEqual(service.text_time_ms, expected_ms)
+
 
 if __name__ == "__main__":
     unittest.main()

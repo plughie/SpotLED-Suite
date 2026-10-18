@@ -2,7 +2,7 @@
 
 DEFAULT_DEVICE_NAME = "SpotLED_*"
 
-TEXT_SPEEDS_MS = {"slow": 300, "normal": 200, "fast": 100}
+TEXT_SPEEDS_MS = {"slow": 300, "250ms": 250, "normal": 200, "150ms": 150, "fast": 100}
 
 TEXT_EFFECTS = {
     "slide": 0,
@@ -19,7 +19,7 @@ TEXT_EFFECTS = {
 def text_speed_ms(speed: str) -> int:
     """Map Android-compatible speed labels to their protocol timing values."""
     if not isinstance(speed, str) or speed.strip().lower() not in TEXT_SPEEDS_MS:
-        raise ValueError("text speed must be slow, normal, or fast")
+        raise ValueError("text speed must be slow, 250ms, normal, 150ms, or fast")
     return TEXT_SPEEDS_MS[speed.strip().lower()]
 
 

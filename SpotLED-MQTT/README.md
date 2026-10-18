@@ -21,8 +21,9 @@ with contributions from **clavo** and **OpenAI Codex**.
   `SPOTLED_TEXT_EFFECT` to `slide`, `up`, `down`, `left`, `right`, `snow`,
   `scroll`, or `laser` to select another tested protocol effect.
 - `SPOTLED_TEXT_MODE` selects `native` (default) or `raster` text rendering;
-  `SPOTLED_TEXT_SPEED` selects `slow`, `normal` (default), or `fast` (300/200/100 ms).
-  These match Android's timing choices; the user confirmed the configured MQTT speed applies to both notifications and periodic weather text.
+  `SPOTLED_TEXT_SPEED` selects `slow` (300 ms), `250ms`, `normal` (default, 200 ms),
+  `150ms`, or `fast` (100 ms). Higher intervals move more slowly. The selected speed
+  applies to both notifications and periodic weather text.
 - `SPOTLED_DEVICE_NAME` (required): use the exact advertised name shown during
   display startup: `SpotLED_` followed by the four-character hexadecimal ID,
   for example `SpotLED_AB12`.
