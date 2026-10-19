@@ -28,11 +28,13 @@ Build the signed internal-sideload variant with:
 ./gradlew testReleaseUnitTest assembleRelease
 ```
 
-Latest release: [SpotLED-Companion.apk v0.19.5](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.5/SpotLED-Companion.apk), package `com.spotled.app`.
+Latest release: [SpotLED-Companion.apk v0.19.6](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.6/SpotLED-Companion.apk), package `com.spotled.app`.
 
 Version 0.16.0 (versionCode 17) remembers the last selected display and prompts to discover one when a send has no remembered target; the user validated both flows across app restarts using text and images. Version 0.16.1 (versionCode 18) persists image rotation and fit across the system Photo Picker. Version 0.16.2 (versionCode 19) adds 150 ms and 250 ms choices alongside 100/200/300 ms in both native and raster timing. The user physically validated Android image rotations at 0°/90°/180°/270° and compared Contain/Cover/Stretch using the asymmetric test pattern. Version 0.15.0 added the animated GIF preview, which animates the same two transformed frames sent to the display and pauses in the background.
 
-The v0.19.5 signed APK is at `app/build/outputs/apk/release/SpotLED-Companion.apk`; SHA-256: `278e9d8e6f940d07826c89cc6d8c9f348f016c425d2ee8585a2301656b2a60cd`. The user confirmed the Companion MQTT failure message appears on the SpotLED. Native Fast (100 ms) was confirmed about 3× faster than native Slow (300 ms). Raster Slow (300 ms) matches native Slow; Fast raster is faster than Normal raster but slower than Fast native. SpotLED-MQTT was stopped during those speed tests.
+The v0.19.6 signed APK is at `app/build/outputs/apk/release/app-release.apk`; SHA-256: `c2e340f5861f2227b2cbe3125f12f98e367bb951d2aa4c3f994505474fcf0abe`. It includes a serifed native capital I with a one-pixel stem matching T and the same 12-row cap height as the other capitals. The APK is signed with the local Android debug identity for contributor sideloading, not production distribution.
+
+The v0.19.5 release was confirmed by the user to show Companion MQTT failure messages on the SpotLED. Native Fast (100 ms) was confirmed about 3× faster than native Slow (300 ms). Raster Slow (300 ms) matches native Slow; Fast raster is faster than Normal raster but slower than Fast native. SpotLED-MQTT was stopped during those speed tests.
 
 For this contributor-test build, `release` uses the local Android debug signing identity so the APK can update the currently installed prototype. The APK is signed and sideloadable, but this is **not a production release key**. No private signing key or password is in the project. To distribute future compatible updates or publish publicly, create and securely back up an owner-controlled release key, then use that same key for every update. The collaborator can install this APK fresh; an existing app signed by a different key cannot be updated in place.
 
@@ -43,7 +45,8 @@ For this contributor-test build, `release` uses the local Android debug signing 
 - Release APK: `app/build/outputs/apk/release/app-release.apk` (versionCode 23, v0.18.0); signed with the local debug identity for contributor sideloading and installed on the Pixel 6a.
 - The v0.19.0 release passes 32 JVM tests and `lintRelease`; the signed APK was installed on the Pixel 6a.
 - The v0.19.1 patch stores the fully composed icon frame before animation playback; the user confirmed the persistent moon/weather stack from Android and Mac.
-- The v0.19.5 release passes 33 JVM tests and `lintRelease`. It requests the internal signature permission required for notification forwarding; the user confirmed Companion MQTT failure text displays on the SpotLED. The APK uses the local debug signing identity for contributor sideloading.
+- The v0.19.5 release passed 33 JVM tests and `lintRelease`; it requests the internal signature permission required for notification forwarding.
+- The v0.19.6 release passes 34 JVM tests and `lintRelease`. The APK verifies with APK Signature Scheme v2 and includes the native serifed capital-I regression fix.
 - SpotLED-MQTT was stopped before speed tests to avoid BLE contention. User confirmed native Slow (300 ms) was slow and Fast (100 ms) about 3× faster; raster Slow matches native Slow and Fast raster is faster than Normal raster, but slower than Fast native.
 - User confirmed the v0.14.0 launcher icon, “SPOTLED Companion” header, gear-based Settings/About, appearance options, and native/raster text switch on the Pixel 6a.
 - User confirmed the v0.13.0 native Scroll-left text output and improved glyph rendering on the SpotLED; other native effect choices have not yet been individually checked.

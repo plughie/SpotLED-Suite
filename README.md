@@ -4,7 +4,9 @@ SpotLED Suite is a set of tools for sending text, images, and animated GIFs to a
 64×16 SpotLED display. It includes a Python command-line sender, the Android
 SpotLED Companion app, and SpotLED-MQTT, a service that displays MQTT alerts and
 clock/weather information. Android also supports an optional foreground
-clock/weather/MQTT service. An iPhone app is a longer-term goal.
+clock/weather/MQTT service. The iOS companion is in early development and is
+limited to foreground text/image transfers; MQTT and background weather are
+intentionally excluded.
 
 ## Installation
 
@@ -58,7 +60,7 @@ for all options and lifecycle controls.
 ### Android Companion
 
 Download and sideload the latest [SpotLED-Companion APK
-(v0.19.5)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.5/SpotLED-Companion.apk).
+(v0.19.6)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.6/SpotLED-Companion.apk).
 The APK is signed for contributor sideloading, not production distribution via
 an app store.
 
@@ -77,6 +79,7 @@ and source details are documented in the MQTT README.
 
 - [Python sender](SPOTLED-v3.py)
 - [Android Companion](android/README.md)
+- [iOS Companion](ios/README.md)
 - [SpotLED-MQTT](SpotLED-MQTT/README.md)
 - [Changelog](CHANGELOG.md)
 - [Prioritized TODO](TODO.md)

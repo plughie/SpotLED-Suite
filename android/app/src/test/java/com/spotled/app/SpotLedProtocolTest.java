@@ -217,6 +217,20 @@ public class SpotLedProtocolTest {
         assertFalse(java.util.Arrays.equals(w, n));
     }
 
+    @Test public void capitalINativeGlyphHasSerifs() {
+        byte[] glyph = SpotLedProtocol.nativeFontObject('I');
+        assertEquals(47, glyph.length);
+        assertEquals(0, u16(glyph, 14));
+        assertEquals(0, u16(glyph, 16));
+        assertEquals(0x1ff0, u16(glyph, 18));
+        assertEquals(0x0100, u16(glyph, 20));
+        assertEquals(0x0100, u16(glyph, 38));
+        assertEquals(0x1ff0, u16(glyph, 40));
+        assertEquals(0, u16(glyph, 42));
+        assertEquals(0, u16(glyph, 44));
+        assertEquals(SpotLedProtocol.checksum(glyph, 46), glyph[46] & 0xff);
+    }
+
     @Test public void nativeMarqueeMatchesPerCharacterFontOrderAndColoredCharacterString() {
         byte[][] transfers = SpotLedProtocol.buildNativeTextTransfers("ABA", 1, 3);
         byte[] wordStock = transfers[0];

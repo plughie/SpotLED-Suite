@@ -14,6 +14,7 @@
 - [x] User confirmed the persistent moon/weather animation works on the SpotLED from both the Android app and Mac bridge.
 - [x] Build v0.19.2 with optional Companion MQTT error forwarding, one alert per outage category, and routine service-status suppression.
 - [x] Publish v0.19.5: fix the internal broadcast permission, normalize Companion MQTT errors for the display, and validate the error message on the SpotLED from Android.
+- [x] Publish Android v0.19.6 with a serifed, cap-height-matched native capital I; align the glyph across Python and iOS, and begin the foreground-only iOS companion source project. Keep iOS distribution per-developer and do not create iOS releases.
 
 - [x] Use the supplied SpotLED artwork as the launcher icon for adaptive and legacy Android launchers.
 - [x] Add persisted System/Light/Dark themes and a gear menu with Settings and About.
@@ -184,7 +185,9 @@
 - [ ] Physically validate Android text effects on the SpotLED device; the command IDs are source-verified but raster-text animation behavior is not yet hardware-confirmed.
 - [ ] Visually validate solid and rainbow text colors on the SpotLED device.
 - [ ] Freeze shared protocol test vectors and transfer behavior for cross-platform parity.
-- [ ] Implement the corresponding iPhone app with Bluetooth discovery, permissions, connection lifecycle, content preview, image/text rotation, and transfer feedback.
+- [x] Create the iOS SwiftUI first slice with `SpotLED_*` scanning, distinct text/image previews, Normal/Raster text, still-image transfer, rotation/fit, BLE acknowledgment, and disconnect-after-send.
+- [x] Configure personal iOS signing locally; install and launch the app on the paired iPhone. Each contributor must use their own signing identity.
+- [ ] Validate iOS text and image transfers against SpotLED hardware; add animated GIF handling after the still-image path is confirmed.
 - [ ] Validate both apps against the same hardware test patterns and text cases.
 
 ## Wishlist — defer until current priorities are complete

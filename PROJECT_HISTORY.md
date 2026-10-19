@@ -2,6 +2,19 @@
 
 ## 2026-10-18
 
+- Added the first foreground-only iOS Companion source project: `SpotLED_*` BLE
+  discovery, distinct text/image previews, Normal/Raster text selection, native
+  WordStock text, still-image transforms, and acknowledged send/disconnect flow.
+  Per-contributor signing is required; no iOS release artifact is intended.
+- Replaced iOS native text's compact synthesized glyphs with the captured 16×16
+  glyph set used by Android and Python. Updated the native capital I to have
+  serif bars, a one-pixel stem matching T, and the same 12-row cap height as other capitals across all three
+  senders. User confirmed the I height in the iOS app; targeted Python and
+  Android regression tests pass. Published Android v0.19.6 (versionCode 30);
+  all 34 release unit tests and `lintRelease` pass, and the APK signature
+  verifies. SHA-256: `c2e340f5861f2227b2cbe3125f12f98e367bb951d2aa4c3f994505474fcf0abe`.
+  No iOS release artifact was created.
+
 - Fixed the post-animation fallback seen in the Android NOAA video: before sending a sampled Wetter animation, Android now writes its first fully composed moon/weather frame as the persistent scene, so the display returns to those icons after playback instead of the earlier small ClockTemp raster glyph. Applied the same persistent-base ordering to SpotLED-MQTT for consistent behavior. Added a regression test for static-frame-before-animation send order. Published Android v0.19.1 (versionCode 25); physical validation of the Android fix remains pending. The Mac bridge was not restarted.
 - Released Android v0.19.0 (versionCode 24) and matching Mac SpotLED-MQTT animation: use the 8×8 Wetter.ax GIF assets, choose the moon icon using Wetter.ax's date calculation, stack moon above the bottom-justified condition icon, and select the most visually distinct condition frames for a two-frame 500 ms animation. The Home Assistant speed bar stops before the icon column. The user confirmed reuse permission; Hank the Tank is credited in Android About and the project docs. This host's GIFs remain Git-ignored but are included in the release APK; clones without those local assets retain the static fallback. Python tests pass (48 sender, 25 MQTT); Android tests and lint pass (32 tests). The APK is installed on the Pixel; the phone foreground status service remains off while Mac is active. The Mac HA service was restarted and acknowledged two-frame/500 ms status transfers; the user visually confirmed the animation on the SpotLED. Android-specific visual validation remains pending.
 - Exported 16 named Home Assistant weather-condition GIF previews in `SpotLED-MQTT/`, using the MQTT renderer's exact 5×5 icon pixels enlarged with nearest-neighbor scaling. Added a `.gitignore` pattern so the local GIFs remain out of version control.

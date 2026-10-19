@@ -172,6 +172,10 @@ def get_multiples_of8(n):
 def make_font_object(ch):
     """Build FontObject (type 13) from captured glyphs or 5x7 font"""
     code = ord(ch)
+    # The shared serifed cap-height I replaces the original taller stem glyph.
+    if ch == "I":
+        return bytes.fromhex(
+            "0000002f000d0100100010004920000000001ff001000100010001000100010001000100010001001ff00000000012")
     hex_data = CAP_GLYPHS.get(str(code))
     if hex_data:
         return bytes.fromhex(hex_data)

@@ -5,10 +5,20 @@ notes are preserved in [PROJECT_HISTORY.md](PROJECT_HISTORY.md).
 
 ## [Unreleased]
 
-- Reworked the top-level README to focus on the project overview, installation,
-  and attributions; ongoing work notes stay in the changelog, history, and TODO.
-- User confirmed Android foreground service start/stop, weather source selection,
-  periodic clock updates, and highly visible AWTRIX notification scrolling.
+## [0.19.6] - 2026-10-18
+
+- Add a foreground-only iOS companion source project with `SpotLED_*` discovery,
+  separate text/image previews, Normal/Raster text selection, still-image fit and
+  rotation, and acknowledged BLE transfers. Each developer signs and deploys
+  their own iOS build; no iOS release binary is produced.
+- Use the shared captured 16×16 native glyphs for iOS Normal text, and give the
+  capital I serif bars with a one-pixel stem matching T and the same 12-row cap
+  height across native iOS, Android, and Python output. The user confirmed the
+  updated I height on iOS; Android unit tests and the targeted Python glyph test
+  pass.
+- Android build 30 aligns the native capital-I glyph and includes a regression
+  test. All 34 release unit tests and `lintRelease` pass; the contributor APK is
+  signed with the local Android debug identity. No iOS release was created.
 
 ## [0.19.5] - 2026-10-18
 

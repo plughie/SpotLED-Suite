@@ -20,6 +20,8 @@ android/app/src/main/assets/weather-icons/
 android/.gradle/
 android/local.properties
 android/**/build/
+ios/**/xcuserdata/
+ios/SpotLEDCompanion.xcodeproj/
 *.apk
 *.aab
 *.jks

@@ -346,6 +346,21 @@ class ObjectEncodingTests(unittest.TestCase):
         self.assertEqual(int.from_bytes(glyph[:4], "big"), len(glyph))
         self.assertEqual(int.from_bytes(glyph[4:6], "big"), 13)
 
+    def test_capital_i_native_glyph_has_serifs(self):
+        glyph = spotled.make_font_object("I")
+        row = lambda y: int.from_bytes(glyph[14 + y * 2:16 + y * 2], "big")
+
+        self.assertEqual(len(glyph), 47)
+        self.assertEqual(row(0), 0)
+        self.assertEqual(row(1), 0)
+        self.assertEqual(row(2), 0x1FF0)
+        self.assertEqual(row(3), 0x0100)
+        self.assertEqual(row(12), 0x0100)
+        self.assertEqual(row(13), 0x1FF0)
+        self.assertEqual(row(14), 0)
+        self.assertEqual(row(15), 0)
+        self.assertEqual(spotled.check_sum(glyph[:-1]), glyph[-1])
+
     def test_set_data_wrapper_lengths_and_checksum(self):
         object_data = spotled.build_character_string("A")
         wrapped = spotled.wrap_set_data(object_data)
