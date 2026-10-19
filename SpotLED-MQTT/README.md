@@ -24,7 +24,9 @@ with contributions from **clavo** and **OpenAI Codex**.
 - Select the weather source at launch with `--weather-source noaa` (default) or
   `--weather-source homeassistant`. NOAA mode reads the latest observation from
   the station named by `NOAA_WEATHER_STATION`, once at startup and every quarter
-  hour. NOAA mode does not show the Home Assistant speed bar.
+  hour. NOAA mode does not show the Home Assistant speed bar. The NOAA path is
+  implemented but has not yet been validated with the running service or on the
+  SpotLED; colleague testing is pending.
 - Home Assistant mode subscribes to `MQTT_WEATHER_TOPIC`, expecting retained
   JSON with Fahrenheit `temp` and condition string `cond`. It also enables the
   optional `MQTT_SPEED_TOPIC` throughput bar. Both settings are only used in HA mode.
@@ -99,8 +101,9 @@ see [NOAA's credit guidance](https://www.noaa.gov/office-education/outreach-comm
 and the [NWS API documentation](https://www.weather.gov/documentation/services-web-api).
 No machine-specific broker address, indoor-device address, station identifier,
 display identifier, or weather reading is included in this guide. MQTT notifications
-were previously validated; both weather-source paths and the ClockTemp-style frame
-still need live validation. Start it manually
+were previously validated. The new NOAA path is untested, and both weather-source
+paths plus the ClockTemp-style frame still need live validation in this implementation.
+Start it manually
 when the display should be reserved for MQTT; stop it with Ctrl-C before using
 the companion app. Automatic startup is intentionally not configured, avoiding
 display contention and host-specific network permissions.

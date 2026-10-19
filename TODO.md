@@ -50,7 +50,7 @@
 - [x] Make MQTT alerts use the explicit Scroll effect (mode 6) by default for a more prominent visual alert; retain configurable effects and alert lifecycle.
 - [x] Add `--weather-source noaa|homeassistant`; NOAA reads its station from `NOAA_WEATHER_STATION`, while Home Assistant uses retained `MQTT_WEATHER_TOPIC` updates.
 - [x] Keep the speed bar enabled only with the Home Assistant source; NOAA mode omits it.
-- [ ] Set the NOAA station identifier and validate NOAA observations plus the raster status display on-device.
+- [ ] Have the colleague set `NOAA_WEATHER_STATION` and validate NOAA observations plus the raster status display on-device; this source is implemented but untested.
 - [ ] Validate the Home Assistant retained weather source and speed bar on-device.
 - [x] Scrub machine-specific broker/topic/device/readout values from GitHub-facing documentation and require MQTT/device settings through environment variables.
 - [x] Keep SpotLED-MQTT manually started to avoid contention with the companion app; do not configure auto-start.
