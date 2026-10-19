@@ -274,12 +274,36 @@ class PayloadTests(unittest.TestCase):
         with patch("spotled_mqtt.send_rgb_frame", new=AsyncMock()) as static_sender, \
              patch("spotled_mqtt.send_rgb_animation", new=AsyncMock()) as animation_sender:
             asyncio.run(service._show_clock())
+        static_sender.assert_awaited_once()
         if animation_sender.await_count:
             frames = animation_sender.await_args.args[0]
         else:
             frames = [static_sender.await_args.args[0]]
         for pixels in frames:
             self.assertEqual(pixels[15 * 64 * 3:15 * 64 * 3 + 56 * 3], bytes(56 * 3))
+
+    def test_clock_animation_primes_persistent_composed_frame_before_playback(self):
+        service = SpotLedMqttService(weather_source="noaa")
+        service.latest_weather = Weather(60, "cloudy")
+        first = bytes([1]) * (64 * 16 * 3)
+        second = bytes([2]) * (64 * 16 * 3)
+        events = []
+
+        async def send_static(*args, **kwargs):
+            events.append(("static", args[0], kwargs))
+
+        async def send_animation(*args, **kwargs):
+            events.append(("animation", args[0], kwargs))
+
+        with patch("spotled_mqtt.render_clocktemp_animation_frames",
+                   return_value=[first, second]), \
+             patch("spotled_mqtt.send_rgb_frame", new=AsyncMock(side_effect=send_static)), \
+             patch("spotled_mqtt.send_rgb_animation", new=AsyncMock(side_effect=send_animation)):
+            asyncio.run(service._show_clock())
+
+        self.assertEqual([event[0] for event in events], ["static", "animation"])
+        self.assertEqual(events[0][1], first)
+        self.assertEqual(events[1][1], [first, second])
 
 
 if __name__ == "__main__":

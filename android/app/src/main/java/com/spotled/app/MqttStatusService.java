@@ -522,9 +522,19 @@ public final class MqttStatusService extends Service {
         byte[][] frames = WeatherIconAnimation.createFrames(getApplicationContext(), timestamp,
                 currentWeather == null ? null : currentWeather.condition, frame);
         if (frames.length > 1) {
+            // The display treats a multi-frame animation as a brief playback and then
+            // restores the previously stored frame. Prime that frame with the same
+            // moon/weather composition so the icons remain visible after playback.
+            ble.sendRgbFrame(frames[0], ClockTempRenderer.WIDTH, ClockTempRenderer.HEIGHT,
+                    0, 1000);
+            if (!waitForTransfer()) {
+                updateStatus("Clock/weather base frame transfer failed");
+                return;
+            }
             ble.sendRgbAnimation(frames, ClockTempRenderer.WIDTH, ClockTempRenderer.HEIGHT, 500);
         } else {
-            ble.sendRgbFrame(frame, ClockTempRenderer.WIDTH, ClockTempRenderer.HEIGHT, 0, 1000);
+            ble.sendRgbFrame(frames[0], ClockTempRenderer.WIDTH, ClockTempRenderer.HEIGHT,
+                    0, 1000);
         }
         if (!waitForTransfer()) updateStatus("Clock/weather transfer failed");
         else updateStatus("Clock/weather update acknowledged; check the display");

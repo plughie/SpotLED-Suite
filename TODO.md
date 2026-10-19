@@ -153,6 +153,7 @@
 - [x] Publish v0.16.1 with Photo Picker rotation/fit persistence.
 - [x] Publish v0.16.2 with 150 ms and 250 ms speed presets across Android and Python apps.
 - [x] Publish Android v0.19.0 with Wetter.ax animation, moon-phase composition, Hank the Tank attribution, and the matching Mac MQTT renderer updates.
+- [x] Prime the persistent status frame with the composed moon/weather icons before finite animation playback; apply to Android and MQTT. Regression test passes; v0.19.1 is published. Physical validation remains pending.
 - [x] Create `plughie/SpotLED-Suite`, push the project and signed v0.12.0 `SpotLED-Companion.apk` release, scrub installation-specific values from history, and make the repository public.
 - [x] Add the project attributions to the Android About panel and publish the updated v0.12.1 companion APK.
 - [x] User confirms the About panel and attributions on the Android phone.

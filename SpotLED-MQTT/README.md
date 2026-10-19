@@ -23,8 +23,9 @@ permission ([original flow](https://flows.blueforcer.de/flow/fGEhP0cZZd6E#instal
 - The base display is a 64×16 RGB raster approximation of ClockTemp002: date/time,
   optional TC001 indoor temperature, and outdoor temperature with an 8×8 Wetter.ax
   condition icon. When the local ignored icon GIFs are present, weather updates
-  animate the two most distinct icon frames at 500 ms, with the date-calculated
-  moon stacked above and the speed bar ending before the icon column. Without those
+  store the composed moon/weather frame before animating the two most distinct icon
+  frames at 500 ms, so the stacked icons remain after finite playback; the speed bar
+  ends before the icon column. Without those
   host-local assets, it falls back to the built-in static glyph. The clock refreshes
   every minute and the TC001 temperature at startup and once per minute. MQTT alerts
   remain scrolling text.

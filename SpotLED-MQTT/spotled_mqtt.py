@@ -683,6 +683,12 @@ class SpotLedMqttService:
         )
         LOG.info("Updating ClockTemp status: %s", status)
         if len(frames) > 1:
+            # A finite animation returns to the frame stored before playback.
+            # Store the composed moon/weather frame first so that it remains visible.
+            await send_rgb_frame(
+                frames[0], width=64, height=16, device_name=self.device_name,
+                frame_time_ms=1000,
+            )
             await send_rgb_animation(
                 frames, width=64, height=16, device_name=self.device_name,
                 frame_time_ms=ICON_FRAME_INTERVAL_MS,
