@@ -15,3 +15,10 @@ async def send_rgb_frame(pixels: bytes, **options: Any) -> None:
     from .sender import send_rgb_frame as sender_send_rgb_frame
 
     await sender_send_rgb_frame(pixels, **options)
+
+
+async def send_rgb_animation(frames: list[bytes], **options: Any) -> None:
+    """Send sampled RGB frames as an acknowledged SpotLED animation."""
+    from .sender import send_rgb_animation as sender_send_rgb_animation
+
+    await sender_send_rgb_animation(frames, **options)

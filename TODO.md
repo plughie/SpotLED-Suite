@@ -9,6 +9,9 @@
 - [ ] Validate service start/stop, weather source selection, and periodic clock display on the Pixel/SpotLED.
 - [x] Add opt-in Android notification forwarding from a user-selected app allowlist through the foreground service's Scroll alert path; check and request Android Notification Access.
 - [x] On the Pixel, grant Notification Access, select an app, and validate phone-notification forwarding.
+- [x] Add sampled 8×8 Wetter.ax weather-icon animation with a moon-phase icon stacked above it to the Mac and Android ClockTemp status frame.
+- [x] User visually confirmed the animated moon/weather stack from the Mac service on the SpotLED.
+- [ ] Stop the Mac bridge and visually validate the same animation from the Android foreground service on the Pixel; keep only one status service connected at a time.
 
 - [x] Use the supplied SpotLED artwork as the launcher icon for adaptive and legacy Android launchers.
 - [x] Add persisted System/Light/Dark themes and a gear menu with Settings and About.
@@ -50,8 +53,8 @@
 - [x] Make MQTT alerts use the explicit Scroll effect (mode 6) by default for a more prominent visual alert; retain configurable effects and alert lifecycle.
 - [x] Add `--weather-source noaa|homeassistant`; NOAA reads its station from `NOAA_WEATHER_STATION`, while Home Assistant uses retained `MQTT_WEATHER_TOPIC` updates.
 - [x] Keep the speed bar enabled only with the Home Assistant source; NOAA mode omits it.
-- [ ] Have the colleague set `NOAA_WEATHER_STATION` and validate NOAA observations plus the raster status display on-device; this source is implemented but untested.
-- [ ] Validate the Home Assistant retained weather source and speed bar on-device.
+- [x] User visually confirmed the KSQL NOAA status frame on the SpotLED and the temperature difference between San Carlos and Loma Mar.
+- [x] User confirmed the Mac MQTT service works with the ClockTemp002 Home Assistant weather/speed settings and ClockTemp-style display.
 - [x] Scrub machine-specific broker/topic/device/readout values from GitHub-facing documentation and require MQTT/device settings through environment variables.
 - [x] Keep SpotLED-MQTT manually started to avoid contention with the companion app; do not configure auto-start.
 - [ ] Decide whether unsupported AWTRIX icon/sound behavior needs an alternate SpotLED approximation.
@@ -149,6 +152,7 @@
 - [x] Publish v0.16.0 with remembered-display selection and send-time discovery prompts.
 - [x] Publish v0.16.1 with Photo Picker rotation/fit persistence.
 - [x] Publish v0.16.2 with 150 ms and 250 ms speed presets across Android and Python apps.
+- [x] Publish Android v0.19.0 with Wetter.ax animation, moon-phase composition, Hank the Tank attribution, and the matching Mac MQTT renderer updates.
 - [x] Create `plughie/SpotLED-Suite`, push the project and signed v0.12.0 `SpotLED-Companion.apk` release, scrub installation-specific values from history, and make the repository public.
 - [x] Add the project attributions to the Android About panel and publish the updated v0.12.1 companion APK.
 - [x] User confirms the About panel and attributions on the Android phone.
@@ -193,5 +197,5 @@ Ideas from the colleague's `sign-ideas` notes. The app icon, appearance themes, 
 - Add optional NOAA station discovery by ZIP/postal code so users do not need to look up a station ID manually.
 - Explore a two-line text layout and a modular screen split for persistent time/weather plus a scrolling-message area, within the 64×16 panel limits.
 - Add image crop/viewport selection to choose which region is fitted to the display.
-- Use original or permissively licensed pixel-art assets; do not copy AWTRIX artwork without compatible reuse rights.
+- Wetter.ax weather/moon artwork is used with permission and credited to Hank the Tank; retain this attribution in app and project documentation.
 - Explore a localized, non-flashing attention animation (such as a line or outline). Full-panel white on/off strobing remains out of scope because rapid full-frame flashing is not acceptable.

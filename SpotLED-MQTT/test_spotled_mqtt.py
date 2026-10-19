@@ -1,4 +1,5 @@
 import asyncio
+import tempfile
 import unittest
 import sys
 from datetime import datetime
@@ -21,15 +22,71 @@ from spotled_mqtt import (
     parse_noaa_observation,
     parse_weather,
     parse_speed,
+    compose_clocktemp_icons,
+    render_clocktemp_animation_frames,
     render_clocktemp_frame,
+    select_icon_animation_frames,
     seconds_until_next_minute,
     seconds_until_next_quarter_hour,
     text_effect_mode,
+    wetter_moon_icon_id,
     weather_color,
 )
 
 
 class PayloadTests(unittest.TestCase):
+    def test_wetter_moon_phase_matches_source_date_logic(self):
+        self.assertEqual(wetter_moon_icon_id(datetime(2026, 10, 18)), "2320")
+
+    def test_icon_animation_sampling_keeps_first_and_most_distinct_frame(self):
+        quiet = bytes(8 * 8 * 3)
+        weak_bolt = bytes((255, 255, 0)) + bytes(8 * 8 * 3 - 3)
+        strong_bolt = bytearray(8 * 8 * 3)
+        for pixel in (0, 27, 54, 81):
+            strong_bolt[pixel:pixel + 3] = bytes((255, 255, 0))
+        sampled = select_icon_animation_frames([quiet, weak_bolt, bytes(strong_bolt)])
+        self.assertEqual(sampled, [quiet, bytes(strong_bolt)])
+
+    def test_moon_and_weather_icons_stack_in_reserved_right_edge(self):
+        frame = render_clocktemp_frame(
+            datetime(2026, 10, 18, 12, 0), 70, Weather(68, "sunny"), 1000
+        )
+        moon = bytes((1, 2, 3)) * (8 * 8)
+        weather_icon = bytes((4, 5, 6)) * (8 * 8)
+        combined = compose_clocktemp_icons(frame, moon, weather_icon)
+        top_right = (0 * 64 + 56) * 3
+        bottom_right = (8 * 64 + 56) * 3
+        speed_bar_end = (15 * 64 + 55) * 3
+        reserved_bar = (15 * 64 + 56) * 3
+        self.assertEqual(combined[top_right:top_right + 3], bytes((1, 2, 3)))
+        self.assertEqual(combined[bottom_right:bottom_right + 3], bytes((4, 5, 6)))
+        self.assertNotEqual(combined[speed_bar_end:speed_bar_end + 3], bytes(3))
+        self.assertEqual(combined[reserved_bar:reserved_bar + 3], bytes((4, 5, 6)))
+
+    def test_wetter_gif_frames_compose_moon_and_sampled_lightning(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as directory:
+            moon = Image.new("RGB", (64, 16), (0, 0, 0))
+            moon.putpixel((56, 0), (255, 255, 255))
+            moon.save(Path(directory) / "moon_2320.gif")
+            cloud = Image.new("RGB", (64, 16), (0, 0, 0))
+            bolt = cloud.copy()
+            bolt.putpixel((60, 10), (255, 255, 0))
+            cloud.save(Path(directory) / "lightning.gif", save_all=True,
+                       append_images=[bolt], duration=[500, 500], loop=0, disposal=2)
+
+            frames = render_clocktemp_animation_frames(
+                datetime(2026, 10, 18, 12, 0), 70, Weather(68, "lightning"),
+                None, "F", Path(directory)
+            )
+
+        self.assertEqual(len(frames), 2)
+        moon_offset = (56 * 3)
+        bolt_offset = ((10 * 64 + 60) * 3)
+        self.assertEqual(frames[0][moon_offset:moon_offset + 3], bytes((255, 255, 255)))
+        self.assertEqual(frames[1][bolt_offset:bolt_offset + 3], bytes((255, 255, 0)))
+
     def test_parses_awtrix_notification_text_color_and_timing(self):
         result = parse_notification(
             b'{"text":"Front Door on","textColor":"#FFD166","durationMs":5000,"stack":false}'
@@ -214,10 +271,15 @@ class PayloadTests(unittest.TestCase):
         self.assertNotIn((service.speed_topic, 0), subscriptions)
         service.latest_speed_mbps = 900
         service.latest_weather = Weather(60, "cloudy")
-        with patch("spotled_mqtt.send_rgb_frame", new=AsyncMock()) as sender:
+        with patch("spotled_mqtt.send_rgb_frame", new=AsyncMock()) as static_sender, \
+             patch("spotled_mqtt.send_rgb_animation", new=AsyncMock()) as animation_sender:
             asyncio.run(service._show_clock())
-        pixels = sender.await_args.args[0]
-        self.assertEqual(pixels[15 * 64 * 3:16 * 64 * 3], bytes(64 * 3))
+        if animation_sender.await_count:
+            frames = animation_sender.await_args.args[0]
+        else:
+            frames = [static_sender.await_args.args[0]]
+        for pixels in frames:
+            self.assertEqual(pixels[15 * 64 * 3:15 * 64 * 3 + 56 * 3], bytes(56 * 3))
 
 
 if __name__ == "__main__":

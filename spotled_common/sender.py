@@ -1048,6 +1048,41 @@ async def send_rgb_frame(pixels, width=64, height=16, device_name=DEVICE_NAME,
         await send_set_acknowledged(client, 0x8004, payload)
     print(f"RGB frame transfer acknowledged ({width}x{height}).")
 
+async def send_rgb_animation(frames, width=64, height=16, device_name=DEVICE_NAME,
+                             frame_time_ms=500):
+    """Send an already-rasterized RGB animation within the device receive limit."""
+    frames = [bytes(frame) for frame in frames]
+    if not frames:
+        raise ValueError("RGB animation must contain at least one frame")
+    if not 1 <= frame_time_ms <= 0xFFFF:
+        raise ValueError("Frame interval must be from 1 to 65,535")
+    for frame in frames:
+        if len(frame) != width * height * 3:
+            raise ValueError("RGB bytes do not match frame dimensions")
+    async with connected_device(device_name) as client:
+        screen, capabilities, receive_capacity = await query_image_capabilities(client)
+        if (screen["width"], screen["height"]) != (width, height):
+            raise RuntimeError(
+                f"Raster dimensions {width}x{height} do not match the display "
+                f"{screen['width']}x{screen['height']}"
+            )
+        if screen["color_type"] != 0xFF:
+            raise RuntimeError(
+                f"RGB animation requires color type 0xFF; device reports "
+                f"0x{screen['color_type']:02X}"
+            )
+        source_frames = [(frame, frame_time_ms) for frame in frames]
+        payload, frames_sent, interval = build_animation_transfer(
+            source_frames, capabilities["max_frames"], receive_capacity, width, height
+        )
+        if "storage_bytes" in capabilities and len(payload) > capabilities["storage_bytes"]:
+            raise RuntimeError("RGB animation exceeds the device storage limit")
+        await send_set_acknowledged(client, 0x8004, payload)
+    print(
+        f"RGB animation transfer acknowledged ({width}x{height}, "
+        f"frames={frames_sent}, interval={interval}ms)."
+    )
+
 async def send_rotated_text(text, color, rotation, fit='contain', preview_path=None,
                             raster_font='3x5', text_layout='whole',
                             device_name=DEVICE_NAME, mode=0, frame_time_ms=200):

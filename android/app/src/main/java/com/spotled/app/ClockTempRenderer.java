@@ -10,6 +10,25 @@ final class ClockTempRenderer {
 
     private ClockTempRenderer() { }
 
+    static byte[] composeWeatherIcons(byte[] frame, byte[] moonIcon, byte[] weatherIcon) {
+        int iconBytes = 8 * 8 * 3;
+        if (frame == null || frame.length != WIDTH * HEIGHT * 3
+                || moonIcon == null || moonIcon.length != iconBytes
+                || weatherIcon == null || weatherIcon.length != iconBytes)
+            throw new IllegalArgumentException("ClockTemp frame and 8x8 icon dimensions do not match");
+        byte[] result = frame.clone();
+        for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8; x++) {
+                int iconOffset = (y * 8 + x) * 3;
+                int moonOffset = (y * WIDTH + WIDTH - 8 + x) * 3;
+                int weatherOffset = ((y + 8) * WIDTH + WIDTH - 8 + x) * 3;
+                System.arraycopy(moonIcon, iconOffset, result, moonOffset, 3);
+                System.arraycopy(weatherIcon, iconOffset, result, weatherOffset, 3);
+            }
+        }
+        return result;
+    }
+
     static byte[] render(ZonedDateTime now, Float indoor, MqttPayloads.Weather weather,
                          Float speedMbps, boolean celsius) {
         byte[] rgb = new byte[WIDTH * HEIGHT * 3];
@@ -83,9 +102,11 @@ final class ClockTempRenderer {
     }
 
     private static void drawSpeedBar(byte[] rgb, float speed) {
-        int end = Math.min(WIDTH - 1, Math.max(0, Math.round(Math.max(0, speed) / 1000f * (WIDTH - 1))));
+        int speedWidth = WIDTH - 8;
+        int end = Math.min(speedWidth - 1, Math.max(0,
+                Math.round(Math.max(0, speed) / 1000f * (speedWidth - 1))));
         for (int x = 0; x <= end; x++) {
-            float percent = x * 100f / (WIDTH - 1);
+            float percent = x * 100f / (speedWidth - 1);
             int red = 255, green;
             if (percent <= 33.333f) green = Math.round(percent * 128f / 33.333f);
             else if (percent <= 66.666f) green = Math.round(128f + (percent - 33.333f) * 127f / 33.333f);

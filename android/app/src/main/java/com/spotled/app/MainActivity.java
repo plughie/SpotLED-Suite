@@ -704,7 +704,8 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("About SpotLED Companion")
                 .setMessage("SpotLED Suite is a Bug-Mag.net project by DuvTheDove, "
-                        + "with contributions from clavo and OpenAI Codex.")
+                        + "with contributions from clavo and OpenAI Codex. "
+                        + "Weather icons by Hank the Tank (Wetter.ax), used with permission.")
                 .setPositiveButton("Close", (dialog, which) -> dialog.dismiss())
                 .show();
     }

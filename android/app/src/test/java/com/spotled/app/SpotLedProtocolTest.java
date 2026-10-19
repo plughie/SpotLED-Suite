@@ -96,6 +96,40 @@ public class SpotLedProtocolTest {
         for (int i = 15 * 64 * 3; i < 16 * 64 * 3; i++) assertEquals(0, noSpeed[i]);
     }
 
+    @Test public void clockFrameReservesRightEdgeForStackedWeatherIcons() {
+        ZonedDateTime now = ZonedDateTime.of(2026, 10, 18, 15, 5, 0, 0,
+                ZoneId.of("America/Los_Angeles"));
+        MqttPayloads.Weather weather = new MqttPayloads.Weather(68, "sunny");
+        byte[] base = ClockTempRenderer.render(now, 70f, weather, 1000f, false);
+        int speedEnd = (15 * 64 + 55) * 3;
+        int iconColumn = (15 * 64 + 56) * 3;
+        assertArrayEquals(new byte[] {0, (byte) 255, 0},
+                java.util.Arrays.copyOfRange(base, speedEnd, speedEnd + 3));
+        assertArrayEquals(new byte[] {0, 0, 0},
+                java.util.Arrays.copyOfRange(base, iconColumn, iconColumn + 3));
+
+        byte[] moon = new byte[8 * 8 * 3];
+        byte[] condition = new byte[8 * 8 * 3];
+        java.util.Arrays.fill(moon, (byte) 0x11);
+        java.util.Arrays.fill(condition, (byte) 0x22);
+        byte[] composed = ClockTempRenderer.composeWeatherIcons(base, moon, condition);
+        int topIcon = (0 * 64 + 56) * 3;
+        int bottomIcon = (8 * 64 + 56) * 3;
+        assertArrayEquals(new byte[] {0x11, 0x11, 0x11},
+                java.util.Arrays.copyOfRange(composed, topIcon, topIcon + 3));
+        assertArrayEquals(new byte[] {0x22, 0x22, 0x22},
+                java.util.Arrays.copyOfRange(composed, bottomIcon, bottomIcon + 3));
+    }
+
+    @Test public void wetterMoonCalculationAndWeatherIconAliasesMatchAwtrix() {
+        ZonedDateTime now = ZonedDateTime.of(2026, 10, 18, 12, 0, 0, 0,
+                ZoneId.of("America/Los_Angeles"));
+        assertEquals(2320, WeatherIconAnimation.moonIconId(now));
+        assertEquals("lightning.gif", WeatherIconAnimation.weatherAssetName("lightning"));
+        assertEquals("lightning-rainy.gif", WeatherIconAnimation.weatherAssetName("lightning-rainy"));
+        assertEquals("unknown.gif", WeatherIconAnimation.weatherAssetName("other-condition"));
+    }
+
     @Test public void mqttAlertCanUseExactRgbAndProminentScrollEffect() {
         byte[] text = SpotLedProtocol.buildNativeTextTransfersSolidColor(
                 "A", 0xff12ab34, 6, 200)[1];

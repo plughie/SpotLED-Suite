@@ -516,9 +516,16 @@ public final class MqttStatusService extends Service {
     private void showClockFrame() {
         if (ble == null || !ble.hasSelectedDevice()) return;
         boolean celsius = "C".equals(temperatureUnit);
-        byte[] frame = ClockTempRenderer.render(now(), indoorTemperature, currentWeather,
+        ZonedDateTime timestamp = now();
+        byte[] frame = ClockTempRenderer.render(timestamp, indoorTemperature, currentWeather,
                 "homeassistant".equals(weatherSource) ? speedMbps : null, celsius);
-        ble.sendRgbFrame(frame, ClockTempRenderer.WIDTH, ClockTempRenderer.HEIGHT, 0, 1000);
+        byte[][] frames = WeatherIconAnimation.createFrames(getApplicationContext(), timestamp,
+                currentWeather == null ? null : currentWeather.condition, frame);
+        if (frames.length > 1) {
+            ble.sendRgbAnimation(frames, ClockTempRenderer.WIDTH, ClockTempRenderer.HEIGHT, 500);
+        } else {
+            ble.sendRgbFrame(frame, ClockTempRenderer.WIDTH, ClockTempRenderer.HEIGHT, 0, 1000);
+        }
         if (!waitForTransfer()) updateStatus("Clock/weather transfer failed");
         else updateStatus("Clock/weather update acknowledged; check the display");
     }

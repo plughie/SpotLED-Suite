@@ -14,12 +14,13 @@ import signal
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from spotled_common import send_rgb_frame, send_text, text_effect_mode, text_render_mode, text_speed_ms
+from spotled_common import send_rgb_animation, send_rgb_frame, send_text, text_effect_mode, text_render_mode, text_speed_ms
 from spotled_common.font3x5 import FONT3X5
 
 try:
@@ -30,6 +31,43 @@ except ImportError:  # Keep pure parsing helpers importable for tests.
 LOG = logging.getLogger("spotled_mqtt")
 DISMISS = object()
 CLOCK_REFRESH = object()
+ICON_X = 56
+ICON_SIZE = 8
+ICON_FRAME_INTERVAL_MS = 500
+
+WEATHER_ICON_NAMES = {
+    "sunny": "sunny", "clear-night": "clear-night", "partlycloudy": "partlycloudy",
+    "cloudy": "cloudy", "fog": "fog", "rainy": "rainy", "pouring": "pouring",
+    "snowy": "snowy", "snowy-rainy": "snowy-rainy", "hail": "hail",
+    "lightning": "lightning", "lightning-rainy": "lightning-rainy",
+    "windy": "windy", "windy-variant": "windy-variant", "exceptional": "exceptional",
+}
+
+
+def wetter_moon_icon_id(day: datetime) -> str:
+    """Return the icon ID selected by Wetter.ax's integer Julian-day logic."""
+    month = day.month
+    a = int((14 - month) / 12)
+    year = day.year + 4800 - a
+    adjusted_month = month + 12 * a - 3
+    phase = (day.day + (153 * adjusted_month + 2) // 5 + 365 * year
+             + year // 4 - year // 100 + year // 400 - 2483595) / 29.53058867
+    phase -= int(phase)
+    if phase < 0.03 or phase >= 0.97:
+        return "2318"
+    if phase < 0.22:
+        return "2321"
+    if phase < 0.28:
+        return "2320"
+    if phase < 0.48:
+        return "2319"
+    if phase < 0.52:
+        return "2314"
+    if phase < 0.72:
+        return "2315"
+    if phase < 0.78:
+        return "2316"
+    return "2317"
 
 
 @dataclass(frozen=True)
@@ -321,11 +359,93 @@ def render_clocktemp_frame(now: datetime, indoor: float | None, weather: Weather
     for x in range(64):
         _clock_pixel(pixels, x, 15, (0, 0, 0))
     if speed_mbps is not None and speed_max_mbps > 0:
-        span = 63
+        # Reserve the rightmost eight columns for the stacked 8x8 moon/weather icons.
+        span = 55
         finish = int(max(0.0, min(1.0, speed_mbps / speed_max_mbps)) * span)
         for x in range(finish + 1):
             _clock_pixel(pixels, x, 15, _clocktemp_speed_color(x * 100 / span))
     return bytes(pixels)
+
+
+def wetter_icon_filename(condition: str) -> str:
+    """Resolve an HA condition to the local Wetter.ax 8x8 icon preview name."""
+    return WEATHER_ICON_NAMES.get(condition.strip().lower(), "unknown")
+
+
+def select_icon_animation_frames(frames: list[bytes]) -> list[bytes]:
+    """Keep the first icon frame and the frame most visually distinct from it."""
+    if not frames:
+        return []
+    first = bytes(frames[0])
+    best, best_score = None, 0
+    for candidate in frames[1:]:
+        candidate = bytes(candidate)
+        if len(candidate) != len(first):
+            continue
+        score = sum(abs(left - right) for left, right in zip(first, candidate))
+        if score > best_score:
+            best, best_score = candidate, score
+    return [first] if best is None else [first, best]
+
+
+def compose_clocktemp_icons(frame: bytes, moon_icon: bytes, weather_icon: bytes) -> bytes:
+    """Place 8x8 moon and weather RGB icons in a vertical stack at the right edge."""
+    expected = ICON_SIZE * ICON_SIZE * 3
+    if len(frame) != 64 * 16 * 3 or len(moon_icon) != expected or len(weather_icon) != expected:
+        raise ValueError("ClockTemp frame and 8x8 RGB icon dimensions do not match")
+    result = bytearray(frame)
+    for y in range(ICON_SIZE):
+        for x in range(ICON_SIZE):
+            icon_offset = (y * ICON_SIZE + x) * 3
+            moon_target = (y * 64 + ICON_X + x) * 3
+            weather_target = ((y + ICON_SIZE) * 64 + ICON_X + x) * 3
+            result[moon_target:moon_target + 3] = moon_icon[icon_offset:icon_offset + 3]
+            result[weather_target:weather_target + 3] = weather_icon[icon_offset:icon_offset + 3]
+    return bytes(result)
+
+
+def _gif_icon_frames(path: Path, crop_box: tuple[int, int, int, int]) -> list[bytes]:
+    try:
+        from PIL import Image
+    except ImportError:
+        return []
+    if not path.is_file():
+        return []
+    try:
+        frames = []
+        with Image.open(path) as image:
+            for index in range(getattr(image, "n_frames", 1)):
+                image.seek(index)
+                frame = image.convert("RGB")
+                if frame.size != (64, 16):
+                    return []
+                crop = frame.crop(crop_box)
+                frames.append(crop.tobytes())
+        return frames
+    except (OSError, ValueError):
+        return []
+
+
+def render_clocktemp_animation_frames(now: datetime, indoor: float | None,
+                                     weather: Weather | None, speed_mbps: float | None,
+                                     unit: str = "F", icon_dir: Path | None = None) -> list[bytes]:
+    """Render a static status frame or two safe, distinct Wetter icon frames."""
+    frame = render_clocktemp_frame(now, indoor, weather, speed_mbps, unit)
+    if weather is None:
+        return [frame]
+    asset_dir = icon_dir or Path(__file__).resolve().parent
+    moon_frames = _gif_icon_frames(
+        asset_dir / f"moon_{wetter_moon_icon_id(now)}.gif", (ICON_X, 0, 64, ICON_SIZE)
+    )
+    weather_frames = _gif_icon_frames(
+        asset_dir / f"{wetter_icon_filename(weather.condition)}.gif",
+        (ICON_X, ICON_SIZE, 64, 16),
+    )
+    if not moon_frames or not weather_frames:
+        return [frame]
+    moon_icon = moon_frames[0]
+    return [compose_clocktemp_icons(frame, moon_icon, icon_frame)
+            for icon_frame in select_icon_animation_frames(weather_frames)]
 
 
 def noaa_observation_url(station: str) -> str:
@@ -557,15 +677,21 @@ class SpotLedMqttService:
             now, self.latest_indoor_temperature, self.latest_weather,
             speed, self.weather_unit,
         )
-        pixels = render_clocktemp_frame(
+        frames = render_clocktemp_animation_frames(
             now, self.latest_indoor_temperature, self.latest_weather,
             speed, self.weather_unit,
         )
         LOG.info("Updating ClockTemp status: %s", status)
-        await send_rgb_frame(
-            pixels, width=64, height=16, device_name=self.device_name,
-            frame_time_ms=1000,
-        )
+        if len(frames) > 1:
+            await send_rgb_animation(
+                frames, width=64, height=16, device_name=self.device_name,
+                frame_time_ms=ICON_FRAME_INTERVAL_MS,
+            )
+        else:
+            await send_rgb_frame(
+                frames[0], width=64, height=16, device_name=self.device_name,
+                frame_time_ms=1000,
+            )
 
     async def _send(self, text: str, color: tuple[int, int, int]) -> None:
         LOG.info("Sending to %s with %s effect: %s", self.device_name,

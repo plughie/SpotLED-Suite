@@ -171,6 +171,30 @@ class RgbFrameSenderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transfer.await_args.args[1], 0x8004)
         self.assertLessEqual(len(transfer.await_args.args[2]), 7280)
 
+    async def test_sends_sampled_rgb_animation_with_two_safe_frames(self):
+        client = object()
+
+        @asynccontextmanager
+        async def connected(*args, **kwargs):
+            yield client
+
+        first = bytes(64 * 16 * 3)
+        second = bytearray(first)
+        marker = (8 * 64 + 60) * 3
+        second[marker:marker + 3] = bytes((255, 255, 0))
+        with patch.object(spotled, "connected_device", new=connected), \
+             patch.object(spotled, "query_image_capabilities", new=AsyncMock(return_value=(
+                 {"width": 64, "height": 16, "color_type": 0xff},
+                 {"max_frames": 20, "storage_bytes": 16352}, 7280))), \
+             patch.object(spotled, "send_set_acknowledged", new=AsyncMock()) as transfer:
+            await spotled.send_rgb_animation([first, bytes(second)], frame_time_ms=500)
+
+        transfer.assert_awaited_once()
+        payload = transfer.await_args.args[2]
+        self.assertLessEqual(len(payload), 7280)
+        animation = payload[15:]
+        self.assertEqual(animation[6:8], bytes.fromhex("0002"))
+
 
 class ReadRetryTests(unittest.IsolatedAsyncioTestCase):
     async def test_read_query_retries_timeout_once(self):

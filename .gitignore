@@ -4,6 +4,10 @@ __pycache__/
 .venv/
 SpotLED-MQTT/.venv/
 SpotLED-MQTT/env.sh
+# Locally exported ClockTemp condition-icon previews.
+SpotLED-MQTT/*.gif
+# Local Wetter.ax-derived weather/moon GIFs packaged only in this host's APK.
+android/app/src/main/assets/weather-icons/
 *.egg-info/
 /build/
 /dist/
