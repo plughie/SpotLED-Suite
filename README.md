@@ -1,97 +1,82 @@
 # SpotLED Suite
 
-SpotLED Suite combines the Python BLE reference sender, an Android companion app, and the SpotLED-MQTT notification/weather bridge. It supports text and image transfers, rotation, and slow GIF animation to SpotLED displays. An iPhone app remains a longer-term goal.
+SpotLED Suite is a set of tools for sending text, images, and animated GIFs to a
+64×16 SpotLED display. It includes a Python command-line sender, the Android
+SpotLED Companion app, and SpotLED-MQTT, a service that displays MQTT alerts and
+clock/weather information. Android also supports an optional foreground
+clock/weather/MQTT service. An iPhone app is a longer-term goal.
 
-SpotLED Suite is a [Bug-Mag.net](https://bug-mag.net) project by **DuvTheDove**, with contributions from **clavo** and **OpenAI Codex**. The Wetter.ax weather icons are by **Hank the Tank**, used with permission ([original flow](https://flows.blueforcer.de/flow/fGEhP0cZZd6E#install)).
+## Installation
 
-## Current work state
+### Python sender
 
-- BLE discovery matches the `SpotLED_*` advertised-name prefix; set `--device-name` when targeting one specific nearby display.
-- BLE discovery/connection is centralized with actionable errors and up to two attempts; `--device-name` can override the advertised name. Read-only device queries retry once after a timeout. Transfers are not retried after an ambiguous final acknowledgment, to avoid duplicating content or restarting playback.
-- Device information queried successfully: 64 × 16 pixels, color type `0xFF`, 20 maximum frames, 160 text characters, 7,280-byte receive capacity, and 16,352-byte storage field. The reported firmware field was `0x0230404A`.
-- Text baseline: the sender queries live capabilities before transfer, enforces the reported character/receive limits, and rejects non-BMP characters. Native font/text transfers require start/end acknowledgments; `A` and multi-character `HELLO` render. Red `HELLO` with the native `scroll` effect was also confirmed. Geometric text offers whole-line rotation or glyph-by-glyph rotation; 3×5 `HELLO` is confirmed readable at 90° and 270°. Solid colors and a static per-character `rainbow` palette are available; raster text can encode the eight Android reference effects. The device reports a 160-character limit.
-- Image path: file loading, EXIF orientation, alpha compositing, rotation, selectable fit, 64×16 preview, live capability queries, and acknowledged transfer are implemented. File-based 0°/90°/180°/270° outputs and all three fit modes were physically exercised.
-- Animation path: GIF frames and delays are loaded, sampled only when the display's frame-count or receive-size limits require it, and sent with the protocol's shared frame interval, clamped to 250–1,000 ms/frame to avoid rapid flashing. It keeps the largest frame count that fits. The cyan outline (1,000 ms/frame) and `gators.gif` (two sampled frames, 250 ms/frame) visibly animated on hardware. The gator rendering differs slightly from the phone GIF because of 64×16 rasterization and frame sampling. The user confirmed Android GIF handling matches the CLI, including safe pacing and frame transforms, and separately confirmed the animated phone preview works. At 64×16 RGB, the 7,280-byte receive limit usually permits only two full-resolution frames.
-- Fit tradeoffs observed: `contain` preserves proportions but the narrow rotated strip dims or loses isolated dots; `cover` crops while keeping the center as a visible 4×4 magenta square; `stretch` fills the panel but distorts shape and blends some colors. `contain` remains the Python default to avoid crop/distortion; the phone UI should expose all choices and preview them.
-- Physical mapping confirmed with the asymmetric test pattern. Native screen-flip modes 1/2 mirror axes; mode 3 rotates 180°. File-based 0°/90°/180°/270° output is confirmed. Vertical modes `0x10`–`0x13` did not provide quarter-turns. Mode `3` also rotates native text globally; the last observed screen mode was `0`.
-- Latest hardware validation: user reports an 800 KB GIF appeared to animate two frames, consistent with the device's receive-size limit after 64×16 RGB conversion. Earlier, the Python-sent `gators.gif` was confirmed animated at 250 ms/frame; the static 3×5 punctuation sample and cyan outlined rectangle animation (1,000 ms/frame) are also confirmed. No rapid full-panel flashing was used.
-- Collaborator's later terminal screenshot shows an acknowledged GIF transfer at 80 ms/frame. The current `SPOTLED-v3.py` clamps this to at least 250 ms, so that run used an older sender copy; share the current script and `requirements.txt` before further animation tests. Numeric `zsh: command not found` output appears unrelated to the BLE transfer.
-- `SpotLED-MQTT/` contains a configurable long-running MQTT-to-BLE service. It mirrors ClockTemp002 with a raster clock and bitmap condition icon. Choose NOAA/NWS latest station observations (station ID from `NOAA_WEATHER_STATION`) or retained Home Assistant weather with `--weather-source`; the Home Assistant mode also enables the speed bar. The user visually confirmed the KSQL NOAA status on the SpotLED and the temperature difference between San Carlos and Loma Mar; see the MQTT README. NOAA data is credited there, not on the display. MQTT alerts remain text and default to the more prominent Scroll effect. Start it manually when the display should be reserved for MQTT; automatic startup is intentionally not configured.
-- `spotled_common/` is the installable Python library shared by the CLI and MQTT bridge; `SPOTLED-v3.py` remains the compatible command-line entry point.
-- Android reference audit: the send-end response reports transfer status, not render completion. A recipient-status command exists in the APK but has no call site in the decompiled app. The app requests object `0x10` as a screen-visible-point mask; Python now has a parser and a read-only diagnostic, but the device returned no map object in two attempts despite acknowledging the request. The mask is not applied to images.
-- BLE transfer acknowledgments confirm receipt, not successful rendering. Do not treat a completed write as proof of display output.
-- Offline protocol, rotation, fit, response-parser, animation-limit, BLE lifecycle, retry, font, color/effect, discovery, text-mode, speed, CLI, and RGB-frame tests: 48 passing. MQTT bridge tests: 26 passing. Run with `uv run --no-project --with bleak --with pillow python -m unittest -v test_spotled_protocol.py`.
-- Android companion: unrotated text uses the display's native CharacterString/WordStock engine with captured panel glyphs shared with Python; rotated text uses RGB frames for orientation control. Images, GIFs, eight effects, solid/rainbow colors, preview/fit, and `SpotLED_*` discovery are supported. v0.19.0 adds sampled weather-icon animation with a moon-phase icon stacked above it in the Android foreground status service; v0.19.1 keeps the composed icons visible after animation playback. The status service remains outside the planned iOS app scope. See [android/README.md](android/README.md) for configuration, permissions, build and signer details.
-- Download the signed Android companion from the [SpotLED-Companion v0.19.1 release](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.1/SpotLED-Companion.apk). It uses a local Android debug signing identity for internal sideloading, not a production release key; see [android/README.md](android/README.md).
-- Android v0.14.0 includes the supplied launcher icon, System/Light/Dark appearance settings, a native-vs-raster text switch, and a gear menu containing Settings and About. Native text remains the default; the user confirmed these changes on the Pixel 6a.
-- Android v0.15.0 adds Slow/Normal/Fast text timing choices (300/200/100 ms) for native and raster text plus an animated two-frame GIF preview at the safe transfer pace. The user confirmed raster Slow matches native Slow; Fast raster is faster than Normal raster but slower than Fast native.
-- Android v0.16.0 remembers the last selected display without keeping BLE open while idle, and offers discovery when a send is attempted without a remembered target. User validated both behaviors across app restarts with text and image sends.
-- Android v0.16.1 preserves the selected image rotation and fit choices when returning from the system Photo Picker; this was needed after the 90° test returned to the default 0° setting. The user confirmed the fix and physically validated image rotation at 0°/90°/180°/270° plus Contain/Cover/Stretch.
-- v0.16.2 adds 150 ms and 250 ms text-speed choices across Android, the Python CLI, and MQTT, while retaining the existing 100/200/300 ms presets.
-- Python exposes matching `--text-mode native|raster` and `--text-speed slow|250ms|normal|150ms|fast` controls. SpotLED-MQTT accepts `SPOTLED_TEXT_MODE` and `SPOTLED_TEXT_SPEED`; the configured MQTT speed applies to both notifications and periodic weather text. Python apps share the installable `spotled_common` package.
-- `rotate_rgb_pixels()` performs pure clockwise 0°/90°/180°/270° transforms. `fit_rgb_pixels()` supports `contain` (default), `cover`, and `stretch`; quarter-turns swap dimensions before fitting.
-- Raster text offers captured/fallback 16×16 glyphs or an independently authored 3×5 printable-ASCII set (letters, digits, and common punctuation). Unsupported BMP characters become `?`; non-BMP characters and unpaired surrogates are rejected pending a defined multi-code-unit font model. Whole-line rotation with `contain` can shrink longer text substantially; glyph layout keeps rotated letters horizontal and fills more of the screen.
-- AWTRIX NG's compact 5-row/mostly-3-pixel-wide font informed the size target, but its BDF is part of the project's PolyForm Noncommercial license; no AWTRIX glyph data has been copied.
-
-## Run
-
-Install Python 3 and the project dependencies, then run:
+Install Python 3, then clone the repository and install its dependencies:
 
 ```sh
-python3 -m pip install -r requirements.txt
-python3 SPOTLED-v3.py "A"
+git clone https://github.com/plughie/SpotLED-Suite.git
+cd SpotLED-Suite
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
-To install `spotled_common` for use from outside this checkout, run `python3 -m pip install -e .` from the project root.
-
-For geometric text rotation, the sender rasterizes captured/fallback 16×16 glyphs and sends an RGB frame:
+Send text to a nearby display (the sender scans for `SpotLED_*`):
 
 ```sh
-uv run --with bleak --with pillow python SPOTLED-v3.py "A" --rotation 90 --fit contain --preview rotated-text.png
+python SPOTLED-v3.py "Hello" white left
 ```
 
-Without geometric options, text uses the native CharacterString path and its scrolling/entrance effects. Raster text can choose `--raster-font 3x5` or `panel16` and `--text-layout whole` or `glyphs`.
-
-The Python sender accepts Android's text renderer and timing choices; geometric options still force raster output:
+Send a still image or animated GIF:
 
 ```sh
-python3 SPOTLED-v3.py "WWW.HYBRID.NET" white left --text-mode native --text-speed slow
-python3 SPOTLED-v3.py "WWW.HYBRID.NET" white left --text-mode raster --text-speed fast
+python SPOTLED-v3.py --image photo.jpg --rotation 0 --fit contain
 ```
 
-To send text using the Android app's same 3×5 glyphs, static rainbow colors, and a text effect even at 0°:
+See [SpotLED-MQTT/README.md](SpotLED-MQTT/README.md) for MQTT setup and service
+instructions, and [android/README.md](android/README.md) for Android setup,
+permissions, and build details.
+
+### SpotLED-MQTT service
+
+The service needs MQTT network access and BLE radio range to the display. Create
+its virtual environment and local configuration file:
 
 ```sh
-uv run --with bleak python SPOTLED-v3.py "HYBRID" rainbow scroll --raster-font 3x5
+cd SpotLED-Suite/SpotLED-MQTT
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+cp env.sh.example env.sh
 ```
 
-Image input (including GIF) requires Pillow; the requirements file installs it. Example:
+Edit `env.sh` with your broker, topic, and display settings, then start the
+service manually with `python spotled_mqtt.py --weather-source noaa` or
+`python spotled_mqtt.py --weather-source homeassistant`. The ignored `env.sh`
+stays local and is not committed. See the [MQTT guide](SpotLED-MQTT/README.md)
+for all options and lifecycle controls.
 
-```sh
-uv run --with bleak --with pillow python SPOTLED-v3.py --image photo.jpg --rotation 90 --fit contain --preview preview.png
-```
+### Android Companion
 
-The preview is the exact first 64×16 RGB frame sent. `contain` preserves the whole image with black padding; `cover` crops to fill the display; `stretch` fills the display while changing aspect ratio. Animated GIFs retain all frames that fit the device's frame-count and receive-size limits; if needed, frames are evenly sampled and the sender chooses the largest count that fits. The protocol applies one shared interval based on selected frames' average delay, clamped to 250–1,000 ms/frame, so timing is approximate. Prefer localized changes; avoid rapid full-screen flashing.
+Download and sideload the latest [SpotLED-Companion APK
+(v0.19.1)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.1/SpotLED-Companion.apk).
+The APK is signed for contributor sideloading, not production distribution via
+an app store.
 
-The sender scans for `SpotLED_*` by default and prompts if more than one matching device is found. Use `--device-name SpotLED_Example` to select a specific advertised name. Optional arguments are text, color, and animation effect, for example:
+## Attributions
 
-```sh
-python3 SPOTLED-v3.py "HELLO" rainbow scroll
-```
+SpotLED Suite is a [Bug-Mag.net](https://bug-mag.net) project by **DuvTheDove**,
+with contributions from **clavo** and **OpenAI Codex**. The Wetter.ax weather
+and moon icons are by **Hank the Tank**, used with permission; see the
+[original flow](https://flows.blueforcer.de/flow/fGEhP0cZZd6E#install).
 
-Supported color names and effect names are listed in the script's usage output. The device currently reports a 160-character text limit. The script's existing initialization and text flow are still being audited; avoid assuming support for arbitrary Unicode or arbitrary-length text.
+NOAA/National Weather Service observations are retrieved from the
+[NWS API](https://www.weather.gov/documentation/services-web-api). More setup
+and source details are documented in the MQTT README.
 
-## Files
+## Project documentation
 
-- `SPOTLED-v3.py` — backward-compatible CLI entry point for the shared sender library.
-- `spotled_common/` — installable Python package exposing shared settings, a lazy send API, and sender/protocol functionality for both Python applications.
-- `SpotLED-MQTT/` — MQTT-to-SpotLED bridge, tests, configuration instructions, and service-manager deployment notes.
-- `requirements.txt` — Python dependencies (`bleak` and `Pillow`).
-- `test_spotled_protocol.py` — offline packet-layout and checksum regression tests.
-- The locally held decompiled vendor app was used as a protocol reference and is intentionally excluded from this repository.
-- `PROJECT_HISTORY.md` — dated accomplishment and experiment log.
-- `TODO.md` — prioritized remaining work.
-
-## Safety / validation note
-
-Uploads replace the active display content. Earlier malformed frame packets caused the display to remain on a flashing triangle until power-cycled; the previously saved iPhone patterns returned after restart. The corrected image packet rendered successfully.
+- [Python sender](SPOTLED-v3.py)
+- [Android Companion](android/README.md)
+- [SpotLED-MQTT](SpotLED-MQTT/README.md)
+- [Changelog](CHANGELOG.md)
+- [Prioritized TODO](TODO.md)
