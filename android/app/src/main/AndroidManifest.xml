@@ -13,6 +13,7 @@
     <permission
         android:name="com.spotled.app.permission.INTERNAL_NOTIFICATION"
         android:protectionLevel="signature" />
+    <uses-permission android:name="com.spotled.app.permission.INTERNAL_NOTIFICATION" />
 
     <queries>
         <intent>

@@ -97,19 +97,38 @@ public final class MqttStatusService extends Service {
     private boolean phoneNotificationReceiverRegistered;
     private final BroadcastReceiver phoneNotificationReceiver = new BroadcastReceiver() {
         @Override public void onReceive(android.content.Context context, Intent intent) {
-            if (!PhoneNotificationListenerService.ACTION_FORWARD_NOTIFICATION.equals(intent.getAction())
-                    || stopping || displayQueue == null
-                    || !preferences.getBoolean(PhoneNotificationListenerService.PREF_FORWARD_ENABLED, false)
-                    || !preferences.getBoolean(PREF_ENABLED, false)) return;
+            if (intent == null
+                    || !PhoneNotificationListenerService.ACTION_FORWARD_NOTIFICATION.equals(intent.getAction())) return;
             String packageName = intent.getStringExtra("source_package");
+            boolean forwardingEnabled = preferences.getBoolean(
+                    PhoneNotificationListenerService.PREF_FORWARD_ENABLED, false);
+            boolean serviceEnabled = preferences.getBoolean(PREF_ENABLED, false);
+            if ("com.spotled.app".equals(packageName))
+                Log.i(TAG, "Companion alert received; stopping=" + stopping
+                        + " displayQueueReady=" + (displayQueue != null)
+                        + " forwardingEnabled=" + forwardingEnabled
+                        + " serviceEnabled=" + serviceEnabled);
+            if (stopping || displayQueue == null || !forwardingEnabled || !serviceEnabled) return;
             Set<String> selected = preferences.getStringSet(
                     PhoneNotificationListenerService.PREF_FORWARD_PACKAGES, Collections.emptySet());
-            if (packageName == null || !selected.contains(packageName)) return;
+            if (packageName == null || !selected.contains(packageName)) {
+                if ("com.spotled.app".equals(packageName))
+                    Log.w(TAG, "Companion alert ignored because it is not in the saved app selection");
+                return;
+            }
             MqttPayloads.Alert alert = MqttPayloads.phoneNotification(
                     intent.getStringExtra("source_label"),
                     intent.getStringExtra("notification_title"),
                     intent.getStringExtra("notification_body"));
-            if (alert != null) displayQueue.execute(() -> enqueueAlert(alert));
+            if (alert == null) {
+                if ("com.spotled.app".equals(packageName))
+                    Log.w(TAG, "Companion alert contained no displayable text");
+                return;
+            }
+            displayQueue.execute(() -> {
+                Log.i(TAG, "Phone notification alert queued from " + packageName);
+                enqueueAlert(alert);
+            });
         }
     };
 
@@ -487,8 +506,13 @@ public final class MqttStatusService extends Service {
         if (ble != null && ble.hasSelectedDevice()) {
             ble.sendNativeTextSolidColor(alert.text, alert.color, 6,
                     preferences.getInt(PREF_TEXT_TIME_MS, 200));
-            if (!waitForTransfer()) updateStatus("MQTT alert transfer failed");
-            else updateStatus("MQTT alert acknowledged; check the display");
+            if (!waitForTransfer()) {
+                Log.w(TAG, "Alert transfer failed");
+                updateStatus("MQTT alert transfer failed");
+            } else {
+                Log.i(TAG, "Alert transfer acknowledged");
+                updateStatus("MQTT alert acknowledged; check the display");
+            }
         }
         if (!alert.hold && timers != null)
             timers.schedule(() -> displayQueue.execute(() -> finishAlert(generation)),

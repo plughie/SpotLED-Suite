@@ -85,6 +85,49 @@ public class SpotLedProtocolTest {
         assertEquals(null, MqttPayloads.phoneNotification("", "", "  \n "));
     }
 
+    @Test public void companionNotificationForwardingAllowsOnlyMqttFailures() {
+        String ownPackage = "com.spotled.app";
+        assertTrue(PhoneNotificationListenerService.shouldForwardNotification(ownPackage,
+                ownPackage, true, "SPOTLED Companion status service",
+                "MQTT connection failed (reason 32103); retrying"));
+        assertTrue(PhoneNotificationListenerService.shouldForwardNotification(ownPackage,
+                ownPackage, true, "SPOTLED Companion status service",
+                "MQTT disconnected; reconnecting"));
+        assertTrue(PhoneNotificationListenerService.shouldForwardNotification(ownPackage,
+                ownPackage, true, "SPOTLED Companion status service",
+                "Connected, but MQTT topic subscription failed"));
+        assertFalse(PhoneNotificationListenerService.shouldForwardNotification(ownPackage,
+                ownPackage, true, "SPOTLED Companion status service", "Connected to MQTT"));
+        assertFalse(PhoneNotificationListenerService.shouldForwardNotification(ownPackage,
+                ownPackage, true, "SPOTLED Companion status service",
+                "Clock/weather update acknowledged; check the display"));
+        assertFalse(PhoneNotificationListenerService.shouldForwardNotification("other.app",
+                ownPackage, true, "Ongoing", "Routine notification"));
+        assertTrue(PhoneNotificationListenerService.shouldForwardNotification("other.app",
+                ownPackage, false, "Messages", "Hello"));
+        assertEquals("connection", PhoneNotificationListenerService.companionMqttErrorKey(
+                "Status", "MQTT disconnected; reconnecting"));
+        assertEquals("subscription", PhoneNotificationListenerService.companionMqttErrorKey(
+                "Status", "Connected, but MQTT topic subscription failed"));
+        assertEquals("MQTT CONNECTION FAILED",
+                PhoneNotificationListenerService.companionMqttErrorText("Status",
+                        "MQTT connection failed (reason 32103); retrying", "connection"));
+        assertEquals("MQTT DISCONNECTED",
+                PhoneNotificationListenerService.companionMqttErrorText("Status",
+                        "MQTT disconnected; reconnecting", "connection"));
+        assertEquals("MQTT TOPIC FAILED",
+                PhoneNotificationListenerService.companionMqttErrorText("Status",
+                        "Connected, but MQTT topic subscription failed", "subscription"));
+        assertFalse(PhoneNotificationListenerService.shouldForwardCompanionMqttError(
+                "Status", "MQTT connection failed; retrying", "connection"));
+        assertTrue(PhoneNotificationListenerService.shouldForwardCompanionMqttError(
+                "Status", "MQTT connection failed; retrying", null));
+        assertTrue(PhoneNotificationListenerService.isMqttRecoveryStatus(
+                "SPOTLED Companion status service", "Reconnected to MQTT"));
+        assertTrue(PhoneNotificationListenerService.isMqttRecoveryStatus(
+                "SPOTLED Companion status service", "Running; connecting to MQTT"));
+    }
+
     @Test public void androidClockFrameIs64By16AndSpeedBarIsOptional() {
         ZonedDateTime now = ZonedDateTime.of(2026, 10, 18, 15, 5, 0, 0,
                 ZoneId.of("America/Los_Angeles"));

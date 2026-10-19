@@ -7,6 +7,23 @@ notes are preserved in [PROJECT_HISTORY.md](PROJECT_HISTORY.md).
 
 - Reworked the top-level README to focus on the project overview, installation,
   and attributions; ongoing work notes stay in the changelog, history, and TODO.
+- User confirmed Android foreground service start/stop, weather source selection,
+  periodic clock updates, and highly visible AWTRIX notification scrolling.
+
+## [0.19.5] - 2026-10-18
+
+- Allow users to select SPOTLED Companion for Android notification forwarding,
+  but forward only MQTT connection, reconnection, and topic-subscription errors.
+  Suppress routine service status and repeat alerts per error category until
+  reconnection.
+- Normalize Companion MQTT errors to concise uppercase ASCII messages (for
+  example, `MQTT CONNECTION FAILED`) for the small display.
+- Request the internal signature permission required to deliver notification
+  events from the listener to the foreground BLE service; add listener-to-BLE
+  transfer diagnostics.
+- User confirmed the MQTT connection-failure message displays on the SpotLED.
+  Build 29; 33 Android tests pass and `lintRelease` passes. APK is signed with
+  the local Android debug identity for contributor sideloading.
 
 ## [0.19.1] - 2026-10-18
 

@@ -58,7 +58,7 @@ for all options and lifecycle controls.
 ### Android Companion
 
 Download and sideload the latest [SpotLED-Companion APK
-(v0.19.1)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.1/SpotLED-Companion.apk).
+(v0.19.5)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.5/SpotLED-Companion.apk).
 The APK is signed for contributor sideloading, not production distribution via
 an app store.
 

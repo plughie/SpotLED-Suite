@@ -367,7 +367,7 @@ public final class MainActivity extends Activity {
                 PhoneNotificationListenerService.PREF_FORWARD_ENABLED, false));
         form.addView(forwardPhoneNotifications);
         TextView forwardingExplanation = new TextView(this);
-        forwardingExplanation.setText("Selected apps' notification text will scroll across the SpotLED while this service is running. Choose apps, then grant Notification Access in Android Settings.");
+        forwardingExplanation.setText("Selected apps' notification text scrolls across the SpotLED while this service is running. If you select SPOTLED Companion, only MQTT connection/subscription errors are forwarded; routine service status is suppressed. Choose apps, then grant Notification Access in Android Settings.");
         forwardingExplanation.setTextSize(13);
         forwardingExplanation.setPadding(0, dp(2), 0, dp(6));
         form.addView(forwardingExplanation);
@@ -542,6 +542,7 @@ public final class MainActivity extends Activity {
             String label = String.valueOf(info.loadLabel(packageManager));
             apps.add(new ForwardableApp(info.activityInfo.packageName, label));
         }
+        apps.add(new ForwardableApp(getPackageName(), "SPOTLED Companion (MQTT errors only)"));
         Collections.sort(apps, Comparator.comparing((ForwardableApp app) -> app.label,
                 String.CASE_INSENSITIVE_ORDER).thenComparing(app -> app.packageName));
         if (apps.isEmpty()) {
