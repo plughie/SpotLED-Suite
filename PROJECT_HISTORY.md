@@ -1,7 +1,111 @@
 # Project History
 
+## Backlog correction — 2026-10-19
+
+- Removed completed-feature descriptions from open TODO entries: iOS settings,
+  five speeds, saved target/pending sends, themes/About, main-screen rendering
+  selection, lowercase/native-text checks, compact punctuation, GIF preview/send,
+  ImageIO bounds/orientation processing and preview-test correction. These are
+  implementation history, not features awaiting implementation. Their detailed
+  records remain below; any remaining validation is listed separately in TODO.
+- Retired the old Android B-photo, Photo Picker and GATT-133 troubleshooting
+  follow-ups as stale backlog entries following the subsequent font changes and
+  recorded successful picker-based image/rotation/GIF and target-selection
+  workflows. This does not assert every provider or forced GATT failure was
+  tested. Reopen a concrete issue if the fault recurs rather than indefinitely
+  keeping the original implementation ticket open.
+- Retired the old collaborator 80 ms output/version-confirmation request from
+  active development priorities. Updated sources and releases were published;
+  the collaborator's exact installation is not asserted to be verified.
+- Split actual missing code from pending test execution and device validation.
+  Kept the simulator stall, iOS session-isolation/cancellation gaps, shared-data
+  differences, mobile capability queries and Python bridge outage handling open.
+  No source changes, tests, uploads or releases were performed for this correction.
+
+## TODO/source reconciliation — 2026-10-19
+
+Moved 151 completed checklist entries out of TODO into the archive below,
+preserving their original wording and section context. The archive records
+previously reported milestones; it is not a claim that tests or deployments
+were rerun today. Historical service-running statements are point-in-time notes,
+not current service status. Existing chronological records remain intact.
+
+Source-confirmed completions extracted from partially open roadmap items:
+
+- iOS now guards scanning during sends, stops scanning before transfer, cancels
+  connecting as well as connected peripherals, fails pending chunk writes on
+  disconnect and retries only before the payload operation. Full cancellation,
+  stale-callback isolation and failure-injection testing remain open.
+  Evidence: [SpotLedBLEManager.swift](ios/SpotLEDCompanion/SpotLedBLEManager.swift).
+- Native iOS text preserves lowercase, rejects non-BMP scalars, uses a
+  160-character ceiling and checks both encoded payload sizes before upload.
+  The full Android compact punctuation table is present. Shared font generation
+  and cross-platform fallback/codepoint policy are not complete.
+  Evidence: [SpotLEDProtocol.swift](ios/SpotLEDCompanion/SpotLEDProtocol.swift)
+  and [CompactFont.swift](ios/SpotLEDCompanion/CompactFont.swift).
+- Five text speeds, saved display/preferences, pending-send selection, themes
+  and About are implemented. Normal/Raster is now only on the main Text screen;
+  Settings contains appearance and speed. Rotation/fit still share state with
+  text while located in Image, so that UX task remains open.
+  Evidence: [ContentView.swift](ios/SpotLEDCompanion/ContentView.swift).
+- iOS has off-main ImageIO processing, source/pixel limits, EXIF transformation,
+  stale-result rejection, nearest-neighbor fitting, and a two-frame GIF
+  preview/transfer path. Ignoring obsolete results is not the same as cancelling
+  decoding tasks; animation-policy parity and hardware checks remain open.
+  Evidence: [RGBRasterizer.swift](ios/SpotLEDCompanion/RGBRasterizer.swift)
+  and [ContentView.swift](ios/SpotLEDCompanion/ContentView.swift).
+- The native-preview padding test now checks the right-hand region row by row;
+  case/speed and animation packet tests are authored. Recorded development
+  builds and test-target compilation succeeded, but the simulator execution
+  result remains inconclusive.
+  Evidence: [SpotLEDProtocolTests.swift](ios/SpotLEDCompanionTests/SpotLEDProtocolTests.swift).
+
+Validation reconciliation: user-confirmed iOS icon and capital-I height are
+retained, without inferring a complete iOS physical transfer matrix. The earlier
+blanket statement that no content had *ever* been sent from iOS was too broad;
+the supported statement is that the agent did not upload display content during
+the recent parity implementation and full validation is still pending. Existing
+Android/Python physical confirmations remain valid for the specific tests
+recorded; they do not prove byte-for-byte GIF or font parity.
+
+The archived confirmation of persistent moon/weather playback from Android and
+Mac supersedes the earlier v0.19.1 entry's pending-validation wording. Later
+Android GIF playback/preview confirmations likewise supersede the earlier GIF
+implementation entries that awaited testing. Those historical entries remain
+unchanged so the sequence of implementation and subsequent validation is clear.
+
+The remaining Python bridge worker/broker coupling, mobile capability queries,
+release-key migration and asset reproducibility tasks were checked against
+current source and remain open. No runtime files, device state, service state,
+Git commits or releases were changed during this documentation reconciliation.
+
+## 2026-10-19
+
+- Implemented the next iOS foreground-parity slice: persistent theme/speed/text
+  preferences, About credits, Android's complete compact raster glyph set,
+  lowercase native text, remembered display with send-time selection, and a
+  bounded retry before payload transfer. Added two-frame ImageIO GIF sampling,
+  synchronized preview/transfer timing, orientation normalization, a 4 MP decode
+  bound and Android-matching nearest-neighbor fit. Added packet, speed, case and
+  preview tests. Signed development build and test targets compile; simulator
+  execution remains inconclusive due Xcode test-session cleanup. Installed and
+  launched the development build on iPhone; no display content sent and no iOS
+  release artifact created. MQTT/weather/background service remains out of scope.
+- Compared current iOS, Android, shared Python sender and MQTT bridge source.
+  Added a feature-difference table and prioritized, dependency-ordered tasks to
+  TODO with concrete acceptance checks. Highest priorities are iOS connection
+  cleanup/cancellation and Python bridge startup/worker recovery. Recorded font,
+  image-resampling, GIF sampling and device-capability differences rather than
+  claiming full cross-platform parity. Grouped related Wishlist ideas with the
+  implementation work; kept iOS foreground-only and source-only for distribution.
+  Documentation-only assessment: no builds, device uploads or service changes.
+
 ## 2026-10-18
 
+- Reused the Android launcher artwork as the iOS app icon in the shared XcodeGen
+  source; generated-project and per-user signing data remain local. The iOS
+  development build succeeded and was installed/launched on the paired iPhone.
+  No iOS release binary was created.
 - Added the first foreground-only iOS Companion source project: `SpotLED_*` BLE
   discovery, distinct text/image previews, Normal/Raster text selection, native
   WordStock text, still-image transforms, and acknowledged send/disconnect flow.
@@ -178,3 +282,196 @@
 - Updated Python GIF transfer selection to retain every frame when it fits the device limits and otherwise evenly sample the largest frame count that fits the full receive capacity. Regression tests cover full-frame retention and choosing two frames when three do not fit.
 - User reports an 800 KB GIF appeared to animate two frames on the SpotLED, consistent with the receive-size limit after 64×16 RGB conversion. This is a visual playback check; the exact encoded frame count was not captured.
 - Credited Hank the Tank for the Wetter.ax weather/moon icon artwork after the user confirmed reuse permission. Added the attribution to Android About and the top-level, Android, and MQTT READMEs, with a link to the original flow.
+
+## Completed TODO archive — reconciled 2026-10-19
+
+These entries were already checked in TODO before reconciliation. They retain
+their original wording, including test-specific validation limits and historical
+version names. This is a transfer of existing records, not new verification.
+See the reconciliation notes above for current source evidence and corrections.
+
+### iOS implementation update — 2026-10-19
+
+- [x] Add persisted five-speed native/raster settings, appearance choice, About
+  credits, native lowercase handling, and the full Android 3×5 raster glyph set.
+- [x] Remember a selected display; avoid auto-selecting an arbitrary first
+  display; prompt for discovery and continue the pending send after explicit
+  selection; retry one safe pre-transfer connection failure.
+- [x] Add bounded ImageIO downsampling, orientation normalization, Android-matching
+  nearest-neighbor fit, two-frame GIF sampling and a preview of the transmitted
+  frames; impose a source-data and pixel limit.
+- [x] Fix the native preview padding assertion and add native speed/case plus
+  two-frame packet checks. The app and simulator test targets compile; simulator
+  test execution still hangs during Xcode test-session cleanup, so test results
+  are unconfirmed.
+
+### P1 — Android app polish
+
+- [x] Add an Android-only foreground clock/weather/MQTT service with explicit start/stop controls and a persistent notification; keep it out of the planned iOS app scope.
+- [x] Add NOAA/NWS station and Home Assistant retained-weather choices, optional indoor-temperature polling, MQTT Scroll alerts, and a Home Assistant-only speed bar.
+- [x] Allow NOAA clock/weather to run with every MQTT field blank; keep broker/weather-topic requirements for Home Assistant mode and make AWTRIX alerts optional.
+- [x] Validate Android MQTT notification receipt after matching TLS to the broker's plain MQTT port (1883).
+- [x] User validated Android service start/stop, weather-source selection, and periodic clock updates on the Pixel/SpotLED.
+- [x] Add opt-in Android notification forwarding from a user-selected app allowlist through the foreground service's Scroll alert path; check and request Android Notification Access.
+- [x] On the Pixel, grant Notification Access, select an app, and validate phone-notification forwarding.
+- [x] Add sampled 8×8 Wetter.ax weather-icon animation with a moon-phase icon stacked above it to the Mac and Android ClockTemp status frame.
+- [x] User visually confirmed the animated moon/weather stack from the Mac service on the SpotLED.
+- [x] User confirmed the persistent moon/weather animation works on the SpotLED from both the Android app and Mac bridge.
+- [x] Build v0.19.2 with optional Companion MQTT error forwarding, one alert per outage category, and routine service-status suppression.
+- [x] Publish v0.19.5: fix the internal broadcast permission, normalize Companion MQTT errors for the display, and validate the error message on the SpotLED from Android.
+- [x] Publish Android v0.19.6 with a serifed, cap-height-matched native capital I; align the glyph across Python and iOS, and begin the foreground-only iOS companion source project. Keep iOS distribution per-developer and do not create iOS releases.
+- [x] Use the supplied Android launcher artwork as the iOS app icon and install the development build on iPhone; do not create an iOS release.
+- [x] Use the supplied SpotLED artwork as the launcher icon for adaptive and legacy Android launchers.
+- [x] Add persisted System/Light/Dark themes and a gear menu with Settings and About.
+- [x] Add a persisted native/raster text switch; keep native text as the default and require raster for rotation.
+- [x] Remember the last selected Android display without maintaining an idle BLE connection; prompt for discovery when a send has no remembered target.
+- [x] Build and install v0.14.0 on the Pixel 6a; ADB screenshots confirmed the branded title, gear, and dark settings panel.
+- [x] Rename the in-app title to “SPOTLED Companion”.
+- [x] User confirmed the launcher icon, explicit theme choices, raster-mode option, About placement, and branded app title on the Pixel 6a.
+- [x] Persist the last selected Android display; if none is remembered, prompt to scan and continue the pending send after selection without holding an idle BLE connection.
+- [x] User verified on the Pixel that the display is remembered across app restarts and that sends with no remembered display prompt for discovery; tested with both text and images.
+- [x] Persist image rotation and fit settings across system Photo Picker activity returns.
+- [x] Add Slow/Normal/Fast native-text timing and encode the selected 100/200/300 ms value in CharacterString.
+- [x] Stop SpotLED-MQTT and send `WWW.HYBRID.NET` / Scroll left with Slow (300 ms); BLE transfer was acknowledged.
+- [x] User confirmed the Slow (300 ms) setting makes the message move slowly.
+- [x] Send the same text/effect at Fast (100 ms); user confirmed it is about 3× faster than Slow.
+- [x] Send `WWW.HYBRID.NET` / Scroll left in raster mode at Fast (100 ms); BLE transfer was acknowledged.
+- [x] Send the same raster text/effect at Slow (300 ms); BLE transfer was acknowledged.
+- [x] User confirmed raster Slow matches native Slow.
+- [x] User confirmed Fast raster is faster than Normal raster but slower than Fast native.
+- [x] Add 150 ms and 250 ms text-speed presets to the shared Python library, MQTT setting, CLI, and Android selector.
+
+### P1 — Validate Android native marquee text
+
+- [x] Route Scroll up/down/left/right and Scroll through native WordStock/CharacterString transfers at 0° so the full message is sent without image-fit cropping.
+- [x] Preserve selected solid/rainbow character colors and add packet, setup-command, and effect-routing tests.
+- [x] Route all 0° text effects through the native text engine and render the same captured 16×16 glyphs in the preview; retain raster text only for rotated output.
+- [x] Install the updated v0.13.0 APK on the Pixel 6a.
+- [x] User confirmed `WWW.HYBRID.NET` with Scroll left behaves as expected, including improved W/N glyphs.
+
+### P1 — Configure and validate SpotLED-MQTT
+
+- [x] Configure an anonymous MQTT broker and confirm the configured retained weather topic is reachable from the service host.
+- [x] Confirm the service host can discover a `SpotLED_*` display and send the current weather reading.
+- [x] Receive an AWTRIX notification payload, transfer it, and return to the cached weather reading after its duration; user physically confirmed notification behavior.
+- [x] Confirm the user-preferred explicit Scroll-left effect displays as scrolling on the SpotLED.
+- [x] User confirms AWTRIX MQTT notifications use the Scroll action and are highly visible.
+- [x] User confirmed the temperature refreshed after 15 minutes.
+- [x] User confirmed `SPOTLED_TEXT_SPEED` applies to both MQTT notifications and periodic weather text.
+- [x] Make MQTT alerts use the explicit Scroll effect (mode 6) by default for a more prominent visual alert; retain configurable effects and alert lifecycle.
+- [x] Add `--weather-source noaa|homeassistant`; NOAA reads its station from `NOAA_WEATHER_STATION`, while Home Assistant uses retained `MQTT_WEATHER_TOPIC` updates.
+- [x] Keep the speed bar enabled only with the Home Assistant source; NOAA mode omits it.
+- [x] User visually confirmed the KSQL NOAA status frame on the SpotLED and the temperature difference between San Carlos and Loma Mar.
+- [x] User confirmed the Mac MQTT service works with the ClockTemp002 Home Assistant weather/speed settings and ClockTemp-style display.
+- [x] Scrub machine-specific broker/topic/device/readout values from GitHub-facing documentation and require MQTT/device settings through environment variables.
+- [x] Keep SpotLED-MQTT manually started to avoid contention with the companion app; do not configure auto-start.
+
+### P1 — Validate Android animated GIF transfer
+
+- [x] Install the updated APK and send an animated GIF from the Photo Picker to a SpotLED; user confirmed Android GIF animation.
+- [x] User confirmed Android GIF handling works the same as the CLI, including its safe pacing and frame transforms.
+- [x] Animate the GIF preview using the same sampled, transformed frames and safe interval as the display transfer.
+- [x] User confirmed the animated GIF preview works on the Android phone.
+
+### P0 — Verify rotation controls
+
+- [x] Confirm corrected one-frame RGB image renders on the physical device.
+- [x] Confirm red/green/blue/white corner mapping, magenta center, yellow top edge, and cyan left edge.
+- [x] Verify RGB encoding and top-left/row-major pixel orientation with the physical pattern.
+- [x] Verify 180° rotation with screen-flip state 3; restore normal state 0.
+- [x] Test horizontal mode 1; verified left-right reflection across the vertical axis.
+- [x] Test horizontal mode 2; verified top-bottom reflection across the horizontal axis.
+- [x] Test state 0x10 on the current and newly uploaded pattern; neither visibly rotated. Dimensions remained 64 × 16; restored state 0.
+- [x] Test vertical-screen modes 0x11–0x13 with fresh pattern uploads: observed 180° rotation in 0x11/0x13 and horizontal-axis reflection in 0x12; no quarter-turn.
+- [x] Restore normal mode 0 and retransmit the baseline test pattern.
+- [x] Implement and unit-test pure 0°/90°/180°/270° row-major RGB transforms; quarter-turns correctly swap image dimensions.
+- [x] Validate a physical 90° clockwise transform using a portrait source and asymmetric markers.
+- [x] Validate physical 270° clockwise rotation with the same portrait source pattern.
+- [x] Restore normal screen mode 0 and the baseline 0° pattern.
+- [x] Implement selectable `contain` (default), `cover`, and `stretch` policies; physically compare them on rotated image input.
+- [x] Connect image decoding, rotation, fit, preview output, and acknowledged image transfer to the CLI; physically verify a 90° file-based upload.
+- [x] Keep `contain` as the Python default because it avoids crop/distortion; phone UI should expose all fit choices and preview them.
+- [x] Validate file-based 180° image rotation through the CLI; user confirmed the two-axis flip.
+- [x] Validate file-based 270° image rotation through the CLI; user confirmed expected markers.
+- [x] Validate file-based 0° image upload through the CLI; user confirmed the original orientation.
+- [x] Validate file-based 90° image upload after live capability preflight; user confirmed expected marker layout.
+
+### P1 — Make the Python reference dependable
+
+- [x] Create installable `spotled_common` settings/API/sender modules shared by the CLI and MQTT bridge; keep `SPOTLED-v3.py` as a compatibility entry point.
+- [x] Install the common package from the MQTT app's requirements and remove dynamic loading of the hyphenated script.
+- [x] Add Android-compatible `--text-mode native|raster` and Slow/Normal/Fast timing options to the Python sender.
+- [x] Expose matching `SPOTLED_TEXT_MODE` and `SPOTLED_TEXT_SPEED` configuration in SpotLED-MQTT.
+- [x] User physically tested Python native/raster scroll speed; MQTT's `SPOTLED_TEXT_SPEED` applies to notifications and periodic weather text.
+- [x] Parse screen-information response and start/end acknowledgments in image path.
+- [x] Audit Android response/status flow: send-end ACK confirms transfer status, not render completion. A recipient-status command class exists but is not called by the decompiled app; no render-complete signal is evidenced. Continue to require visual confirmation for render claims.
+- [x] Default Python discovery to the `SpotLED_*` prefix, prompt when multiple displays match, and retain exact-name override with `--device-name`.
+- [x] Physically validate slow, localized outlined-rectangle animation (two positions, 1,000 ms/frame); no rapid full-frame flashing tests.
+- [x] Discover the tested device limits (64×16, RGB type 0xFF, 20 frames, 160 text chars, 7,280-byte receive capacity).
+- [x] Query and use live screen width, height, and color type before image transfer.
+- [x] Query/use live frame, text, storage, and receive limits for image transfer guardrails.
+- [x] Query/use live frame, text, storage, and receive limits in the text and image paths.
+- [x] Require transfer start/end acknowledgments for font/text payloads; verify the `A` path still renders.
+- [x] Replace opaque initializer literals with named builders and verify they match the prior working packet bytes.
+- [x] Remove repeated automatic device-control toggles from text send after source audit; keep control builder for explicit operations.
+- [x] Add image input path: decode with EXIF/alpha handling, rotate, selectable fit, preview, capability queries, and 24-bit RGB transfer.
+- [x] Validate asymmetric corner markers and RGB behavior physically; observations are in `PROJECT_HISTORY.md`.
+
+### P2 — Expand content and interaction support
+
+- [x] Verify global screen-flip mode 3 rotates native text 180°; it also moves the glyph to the opposite side of the display.
+- [x] Add rasterized text rotation using captured/fallback 16×16 glyphs; physically verify 90° `A` against its preview.
+- [x] Physically verify raster-text 270° `A` in normal screen mode `0`.
+- [x] Physically verify raster-text 180° `A` in normal screen mode `0`.
+- [x] Verify two-character `AB` at 90°/`contain`; user reports it is readable.
+- [x] Add an independent 3×5 ASCII raster font; AWTRIX NG was used only as a dimension/readability reference because its BDF is under a noncommercial license.
+- [x] Add whole-line versus glyph-by-glyph raster text layout options.
+- [x] Verify 3×5 `HELLO` glyph-layout is readable at 90° and 270°.
+- [x] Visually confirm the static 3×5 `!?+-=()@` punctuation sample on the device.
+- [x] Expand the independent compact font to common printable-ASCII punctuation; unsupported BMP glyphs visibly substitute `?`.
+- [x] Define/test Unicode policy: BMP characters without a glyph substitute `?`; non-BMP characters and unpaired surrogate code points are rejected until the protocol's UTF-16 glyph semantics are verified.
+- [x] Validate multi-character native text (`HELLO`) with captured glyphs on hardware.
+- [x] Validate native text color and a scroll effect (`HELLO`, red, scroll) on hardware.
+- [x] Implement GIF/multi-frame loading, shared-delay animation packets, and receive-capacity guardrails; retain every frame that fits, otherwise evenly sample the largest frame count that fits. Per-frame timing is not representable in the observed protocol. A slow two-frame outline animation was visually confirmed; avoid rapid/full-screen flashing.
+- [x] Physically validate Python GIF sending with `gators.gif`: SpotLED visibly animated the sampled two-frame transfer at 250 ms/frame. User noted rendering differs slightly from the phone GIF, expected with two-frame sampling and 64×16 rasterization.
+- [x] Centralize BLE discovery/connection, allow `--device-name`, and provide contextual discovery/connection/query/transfer timeout errors. Do not automatically retry transfers after a possible payload acceptance.
+- [x] Retry read-only screen/capability queries once after timeout; never retry rejected queries or content transfers automatically.
+- [x] Add two bounded discovery/connection attempts with a fresh client on retry; keep post-payload retries disabled and explicit.
+- [x] Align Python text with Android additions: shared 3×5 glyphs, solid/rainbow per-character color support, and raster-frame effect IDs.
+- [x] Allow explicit 3×5 raster text at 0° via `--raster-font 3x5`; native CharacterString text remains the default when the option is omitted.
+
+### P3 — Mobile applications
+
+- [x] Create the Android project and first vertical slice: text/image input, rotation, preview, BLE discovery/connection, and single-frame RGB transfer.
+- [x] Port the RGB frame-animation wrapper and start/end notification packets; verify builders with Android JVM tests against the Python reference vectors.
+- [x] Add tested row-major rotation plus `contain`, `cover`, and `stretch` choices; retry Android writes only when GATT explicitly reports status 201 (busy).
+- [x] Build and install/launch the debug app on the selected Pixel 6a.
+- [x] Build and verify a signed internal-sideload release APK for contributor review; it uses the local debug signer, not a production key.
+- [x] Publish v0.15.0 with the animated GIF preview and shared Python library changes.
+- [x] Publish v0.16.0 with remembered-display selection and send-time discovery prompts.
+- [x] Publish v0.16.1 with Photo Picker rotation/fit persistence.
+- [x] Publish v0.16.2 with 150 ms and 250 ms speed presets across Android and Python apps.
+- [x] Publish Android v0.19.0 with Wetter.ax animation, moon-phase composition, Hank the Tank attribution, and the matching Mac MQTT renderer updates.
+- [x] Prime the persistent status frame with the composed moon/weather icons before finite animation playback; apply to Android and MQTT. Regression test passes; v0.19.1 is published and the user confirmed Android/Mac behavior.
+- [x] Create `plughie/SpotLED-Suite`, push the project and signed v0.12.0 `SpotLED-Companion.apk` release, scrub installation-specific values from history, and make the repository public.
+- [x] Add the project attributions to the Android About panel and publish the updated v0.12.1 companion APK.
+- [x] User confirms the About panel and attributions on the Android phone.
+- [x] User grants Nearby Devices permission and validates SpotLED BLE discovery/GATT connection in the Android app.
+- [x] User confirms Android text and 0° full-screen image work; 90° image works with `stretch` after GATT busy-write handling.
+- [x] Re-ran 90° Android rotation with persisted picker state; user confirmed the transformed marker layout.
+- [x] User confirmed Android 180° rotation using the asymmetric test PNG and Contain.
+- [x] User confirmed Android 270° rotation using the asymmetric test PNG and Contain.
+- [x] User confirmed 0°/Cover fills the panel with cyan left, magenta center, and yellow right, cropping the portrait frame.
+- [x] User confirmed 0°/Stretch fills the panel as expected; Contain, Cover, and Stretch fit behaviors are now physically compared.
+- [x] Create and upload the asymmetric rotation/fit PNG; user confirmed the 0°/Contain baseline.
+- [x] Replace Android system-font rasterization with the tested independent Python 3×5 glyph table, including B, ASCII case folding, punctuation, and `?` fallback.
+- [x] Route image selection through Android's system Photo Picker on API 33+; retain the document picker as a compatibility fallback.
+- [x] Add the eight APK-verified Android text effects: Slide, Scroll up/down/left/right, Snow, Scroll, Laser.
+- [x] Add Android text colors: white, red, orange, yellow, green, cyan, blue, magenta, and a static per-character rainbow gradient.
+- [x] Broaden Android discovery to `SpotLED_*` and show a chooser when multiple matching displays are found, avoiding silent connection to the wrong unit.
+- [x] Show the Android chooser 1.2s after the first match; continue scanning at 3s intervals for up to 15s if no result appears.
+- [x] Hold no GATT connection while idle: device selection stores the target; each send connects, transfers, and disconnects in `finally`.
+- [x] Add one bounded fresh-GATT retry after failed initial BLE connection and clear stale characteristics on reconnect.
+- [x] Create the iOS SwiftUI first slice with `SpotLED_*` scanning, distinct text/image previews, Normal/Raster text, still-image transfer, rotation/fit, BLE acknowledgment, and disconnect-after-send.
+- [x] Configure personal iOS signing locally; install and launch the app on the paired iPhone. Each contributor must use their own signing identity.
+- [x] Add bounded two-frame GIF sampling, a preview of the transmitted frames, and foreground GIF transfer at the Android-safe interval.
