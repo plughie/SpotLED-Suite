@@ -10,7 +10,7 @@ with contributions from **clavo** and **OpenAI Codex**.
 The Wetter.ax condition and moon icons are by **Hank the Tank**, used with
 permission ([original flow](https://flows.blueforcer.de/flow/fGEhP0cZZd6E#install)).
 
-- `MQTT_NOTIFY_TOPIC` (required): set this to the AWTRIX notification topic,
+- `MQTT_NOTIFY_TOPIC` (optional): set this to the AWTRIX notification topic,
   commonly `<awtrix-prefix>/cmd/notify`. It reads notification `text`, `textColor`,
   `durationMs`, `stack`, and `hold`. Stacked notifications queue, `stack:false`
   replaces the active notification, and the ClockTemp screen returns after an
@@ -20,6 +20,9 @@ permission ([original flow](https://flows.blueforcer.de/flow/fGEhP0cZZd6E#instal
   startup and every quarter-hour.
 - `MQTT_WEATHER_TOPIC` (required for `--weather-source homeassistant`): retained
   Home Assistant weather JSON with Fahrenheit `temp` and a `cond` string.
+- NOAA-only operation does not require `MQTT_HOST`, Paho connectivity, or a
+  notification topic. Set `MQTT_HOST` if NOAA mode should also receive AWTRIX
+  alerts. Home Assistant mode requires a broker host and retained weather topic.
 - The base display is a 64×16 RGB raster approximation of ClockTemp002: date/time,
   optional TC001 indoor temperature, and outdoor temperature with an 8×8 Wetter.ax
   condition icon. When the local ignored icon GIFs are present, weather updates
@@ -28,7 +31,10 @@ permission ([original flow](https://flows.blueforcer.de/flow/fGEhP0cZZd6E#instal
   ends before the icon column. Without those
   host-local assets, it falls back to the built-in static glyph. The clock refreshes
   every minute and the TC001 temperature at startup and once per minute. MQTT alerts
-  remain scrolling text.
+  remain scrolling text. Clock/weather/speed refresh events close together are
+  coalesced into one current-state render; NOAA is fetched as part of the same
+  minute refresh at quarter-hour boundaries. Finite icon animation still primes
+  the persistent base frame before its two-frame playback.
 - Select the weather source at launch with `--weather-source noaa` (default) or
   `--weather-source homeassistant`. NOAA mode reads the latest observation from
   the station named by `NOAA_WEATHER_STATION`, once at startup and every quarter
@@ -100,8 +106,12 @@ file is generic; never put passwords or other local-only values in it.
 For anonymous MQTT, leave username and password empty. Set `MQTT_TLS=true` for
 TLS. `WEATHER_UNIT=C` changes both temperature labels to Celsius; Fahrenheit is
 the default. NOAA weather is a latest-station observation, so update cadence and
-reported conditions depend on the selected station. Logs go to stdout/stderr for
-service-manager capture. BLE opens only while sending and closes after each transfer.
+reported conditions depend on the selected station. With a broker configured,
+Paho reconnects asynchronously while clock/weather workers start immediately.
+Clock display failures are logged; later scheduled refreshes retry with the
+latest state. Unexpected worker failures are logged and restarted after a bounded
+delay. Logs go to stdout/stderr for service-manager capture. BLE opens only while
+sending and closes after each transfer.
 
 The NOAA weather feed is from the U.S. National Weather Service API. NOAA content
 is generally public domain, and NOAA requests that its source/program be credited;

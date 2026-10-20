@@ -3,10 +3,12 @@ import Foundation
 enum SpotLEDProtocolError: LocalizedError {
     case emptyText
     case textTooLong
+    case unsupportedUnicode
     case invalidFrame
     case transferTooLarge
     case rejected(UInt8)
     case timeout(String)
+    case cancelled
     case bluetoothUnavailable
     case deviceNotSelected
     case missingCharacteristic
@@ -15,11 +17,13 @@ enum SpotLEDProtocolError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .emptyText: return "Enter text first."
-        case .textTooLong: return "Text is longer than the display's 150-character safe limit."
+        case .textTooLong: return "Text is longer than the 160-character device limit."
+        case .unsupportedUnicode: return "Native text supports BMP characters only; emoji are not supported yet."
         case .invalidFrame: return "RGB data must be exactly 64×16 pixels."
         case .transferTooLarge: return "Transfer exceeds the display's receive limit."
         case .rejected(let status): return "The display rejected the transfer (status \(status))."
         case .timeout(let phase): return "Timed out waiting for the display's \(phase) acknowledgement."
+        case .cancelled: return "Transfer cancelled."
         case .bluetoothUnavailable: return "Turn on Bluetooth and allow SpotLED Companion to use it."
         case .deviceNotSelected: return "Find and select a SpotLED display first."
         case .missingCharacteristic: return "This display is missing the expected BLE characteristics."
@@ -57,15 +61,42 @@ enum SpotLEDProtocol {
         return payload
     }
 
+    static func buildRGBAnimationPayload(_ frames: [[UInt8]], intervalMs: UInt16) throws -> [UInt8] {
+        guard !frames.isEmpty, frames.count <= Int(UInt16.max),
+              frames.allSatisfy({ $0.count == width * height * 3 }) else {
+            throw SpotLEDProtocolError.invalidFrame
+        }
+        var frameObjects: [UInt8] = []
+        for pixels in frames {
+            var content: [UInt8] = []
+            appendU16(width, to: &content)
+            appendU16(height, to: &content)
+            content.append(0x18)
+            content.append(contentsOf: pixels)
+            frameObjects.append(contentsOf: object(id: 0x60, content: content))
+        }
+        let timing = object(id: 7, content: [0, UInt8(intervalMs >> 8), UInt8(intervalMs & 0xff)])
+        let effect = object(id: 8, content: [0])
+        let count = [UInt8(frames.count >> 8), UInt8(frames.count & 0xff)]
+        let animation = objectWithFollow(id: 11, content: count,
+                                         follow: frameObjects + timing + effect)
+        let payload = wrapSetData(animation, serial: 1)
+        guard payload.count <= maxReceiveBytes else { throw SpotLEDProtocolError.transferTooLarge }
+        return payload
+    }
+
     static func buildNativeTextPayloads(_ text: String, color: SpotLEDTextColor,
                                         effectMode: UInt8, intervalMs: UInt16 = 200) throws -> [[UInt8]] {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw SpotLEDProtocolError.emptyText
         }
-        let chars = text.uppercased().unicodeScalars.map { scalar -> UInt8 in
+        guard text.unicodeScalars.allSatisfy({ $0.value <= 0xFFFF }) else {
+            throw SpotLEDProtocolError.unsupportedUnicode
+        }
+        let chars = text.unicodeScalars.map { scalar -> UInt8 in
             (32...126).contains(scalar.value) ? UInt8(scalar.value) : UInt8(ascii: "?")
         }
-        guard chars.count <= 150 else { throw SpotLEDProtocolError.textTooLong }
+        guard chars.count <= 160 else { throw SpotLEDProtocolError.textTooLong }
 
         var glyphs: [UInt8] = []
         for byte in chars { glyphs.append(contentsOf: nativeFontObject(byte)) }

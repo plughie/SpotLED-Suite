@@ -1,5 +1,49 @@
 # Project History
 
+## 2026-10-19 — P0 reliability implementation
+
+- Coalesced queued `CLOCK_REFRESH` dirty events through one event-loop token and
+  a short debounce before composing a panel snapshot. Moved NOAA quarter-hour
+  polling into the minute clock scheduler, so clock and NOAA state are gathered
+  before a single status render instead of rendering once at the minute boundary
+  and again after the weather response. Each minute now writes one static frame;
+  the base-frame plus two-frame icon animation runs only when the weather
+  condition changes. Added regression tests for refresh bursts, quarter-hour
+  merging and condition-change animation. All 36 MQTT tests pass.
+- Restarted SpotLED-MQTT with `MQTT_HOST` and notification topic blank in the
+  process environment; NOAA-only mode fetched weather. After restart the next
+  minute boundary logged one composed status refresh. Service logs show one
+  update each at 21:42 and 21:45; the user confirmed one visible panel refresh
+  at 21:42. The user reported two visible refreshes at 21:39, although the
+  service logged only one composed update then. The 21:45 panel result was not
+  observed because the user was distracted, so the intermittent discrepancy
+  remains under validation. The NOAA-only service was subsequently stopped at
+  the user's request.
+- Python SpotLED-MQTT now starts NOAA clock/weather without MQTT/Paho or a
+  notification topic. Home Assistant mode still requires MQTT host and weather
+  topic; notification topic is optional. When MQTT is configured, Paho connects
+  asynchronously so broker outages do not block the clock/weather workers.
+  Clock-upload failures are logged and retained state is retried at the next
+  schedule. A task supervisor restarts unexpected display, clock or weather
+  worker failures with a bounded delay. Added NOAA-only startup/scheduler,
+  optional-topic, async-connect and worker-recovery tests; all 32 MQTT tests pass.
+- iOS BLE transfers now carry a session ID through readiness, ACK, chunk-write
+  and disconnect timers. Explicit cancel and app-background/power-off handling
+  settle pending waits, clear queued chunks and stop scanning. Disconnect during
+  an active session fails outstanding waits; a single safe pre-payload retry is
+  retained, and a peripheral whose disconnect times out is quarantined until
+  CoreBluetooth reports it disconnected. Signed development build and simulator
+  test-target compilation succeed; simulator test execution remains inconclusive
+  due Xcode session cleanup. Updated development build installed and launched on
+  iPhone. No SpotLED content was sent and no iOS release was created.
+- Still open: iOS BLE failure-injection tests for late callbacks, cancellation,
+  power-off, disconnect/write races and successful reuse on the next send.
+- User reports all manual iPhone validation checks passed: normal send, saved
+  display/pending-send behavior, unavailable-display timeout and recovery,
+  cancellation, and Bluetooth/background interruption cleanup. Automated
+  simulator failure-injection coverage for stale callbacks and race conditions
+  remains open; no iOS release was built.
+
 ## Backlog correction — 2026-10-19
 
 - Removed completed-feature descriptions from open TODO entries: iOS settings,
@@ -19,7 +63,9 @@
   the collaborator's exact installation is not asserted to be verified.
 - Split actual missing code from pending test execution and device validation.
   Kept the simulator stall, iOS session-isolation/cancellation gaps, shared-data
-  differences, mobile capability queries and Python bridge outage handling open.
+  differences and mobile capability queries open. Python bridge outage handling
+  was still open at that point and was resolved later the same day in the P0
+  implementation entry above.
   No source changes, tests, uploads or releases were performed for this correction.
 
 ## TODO/source reconciliation — 2026-10-19
@@ -74,10 +120,11 @@ Android GIF playback/preview confirmations likewise supersede the earlier GIF
 implementation entries that awaited testing. Those historical entries remain
 unchanged so the sequence of implementation and subsequent validation is clear.
 
-The remaining Python bridge worker/broker coupling, mobile capability queries,
-release-key migration and asset reproducibility tasks were checked against
-current source and remain open. No runtime files, device state, service state,
-Git commits or releases were changed during this documentation reconciliation.
+The then-open Python bridge worker/broker coupling was resolved in the later P0
+implementation entry above. Mobile capability queries, release-key migration
+and asset reproducibility remain open. No runtime files, device state, service
+state, Git commits or releases were changed during the original documentation
+reconciliation.
 
 ## 2026-10-19
 

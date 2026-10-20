@@ -1,8 +1,9 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import UIKit
 
-struct RGBFrame {
+struct RGBFrame: Sendable {
     let width: Int
     let height: Int
     let bytes: [UInt8]
@@ -11,7 +12,7 @@ struct RGBFrame {
     static let screenHeight = 16
 }
 
-enum ImageFit: String, CaseIterable, Identifiable {
+enum ImageFit: String, CaseIterable, Identifiable, Sendable {
     case contain = "Contain"
     case cover = "Cover"
     case stretch = "Stretch"
@@ -19,8 +20,73 @@ enum ImageFit: String, CaseIterable, Identifiable {
 }
 
 enum RGBRasterizer {
+    static func imageFrames(_ data: Data, rotation: Int, fit: ImageFit)
+        throws -> (frames: [RGBFrame], intervalMs: UInt16) {
+        guard data.count <= 50_000_000 else { throw SpotLEDProtocolError.transferTooLarge }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+            throw SpotLEDProtocolError.invalidFrame
+        }
+        let frameCount = CGImageSourceGetCount(source)
+        guard frameCount > 0 else { throw SpotLEDProtocolError.invalidFrame }
+
+        var delays: [Double] = []
+        for index in 0..<frameCount {
+            let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+            let gif = props?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+            let delay = (gif?[kCGImagePropertyGIFUnclampedDelayTime] as? NSNumber)?.doubleValue
+                ?? (gif?[kCGImagePropertyGIFDelayTime] as? NSNumber)?.doubleValue
+                ?? 0.1
+            delays.append(max(0.02, delay))
+        }
+        let totalDuration = delays.reduce(0, +)
+        let sampleIndices: [Int]
+        if frameCount > 1 {
+            let midpoint = totalDuration / 2
+            var elapsed = 0.0
+            var secondIndex = frameCount / 2
+            for (index, delay) in delays.enumerated() {
+                elapsed += delay
+                if elapsed >= midpoint { secondIndex = index; break }
+            }
+            if secondIndex == 0 { secondIndex = min(1, frameCount - 1) }
+            sampleIndices = [0, secondIndex]
+        } else {
+            sampleIndices = [0]
+        }
+
+        var frames: [RGBFrame] = []
+        for index in sampleIndices {
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+            let width = (properties?[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
+            let height = (properties?[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+            guard width > 0, height > 0,
+                  Double(width) * Double(height) <= 1_000_000_000 else {
+                throw SpotLEDProtocolError.invalidFrame
+            }
+            let pixelCount = Double(width) * Double(height)
+            let maxDimension = pixelCount > 4_000_000
+                ? max(1, Int(Double(max(width, height)) * sqrt(4_000_000.0 / pixelCount)))
+                : max(width, height)
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+                kCGImageSourceShouldCacheImmediately: true
+            ]
+            guard let oriented = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else {
+                throw SpotLEDProtocolError.invalidFrame
+            }
+            let normalized = UIImage(cgImage: oriented, scale: 1, orientation: .up)
+            frames.append(try imageFrame(normalized, rotation: rotation, fit: fit))
+        }
+        let interval = frameCount > 1
+            ? max(250, min(1000, Int((totalDuration * 500).rounded())))
+            : 500
+        return (frames, UInt16(interval))
+    }
+
     static func nativeTextFrame(_ text: String, color: SpotLEDTextColor) -> RGBFrame {
-        let chars = normalizedASCII(text)
+        let chars = normalizedASCII(text, uppercased: false)
         var pixels = [UInt8](repeating: 0,
                              count: RGBFrame.screenWidth * RGBFrame.screenHeight * 3)
         for (characterIndex, byte) in chars.enumerated() {
@@ -102,8 +168,9 @@ enum RGBRasterizer {
         return UIImage(cgImage: cg)
     }
 
-    private static func normalizedASCII(_ text: String) -> [UInt8] {
-        Array(text.uppercased().unicodeScalars.map { scalar in
+    private static func normalizedASCII(_ text: String, uppercased: Bool = true) -> [UInt8] {
+        let normalized = uppercased ? text.uppercased() : text
+        return Array(normalized.unicodeScalars.map { scalar in
             (32...126).contains(scalar.value) ? UInt8(scalar.value) : UInt8(ascii: "?")
         })
     }
@@ -135,47 +202,36 @@ enum RGBRasterizer {
         let rotated = rotate(source, width: width, height: height, degrees: rotation)
         let targetWidth = RGBFrame.screenWidth
         let targetHeight = RGBFrame.screenHeight
-        let scaleX: Double
-        let scaleY: Double
-        let originX: Double
-        let originY: Double
-        if fit == .stretch {
-            scaleX = Double(targetWidth) / Double(rotated.width)
-            scaleY = Double(targetHeight) / Double(rotated.height)
-            originX = 0
-            originY = 0
-        } else {
-            let scale = fit == .contain
-                ? min(Double(targetWidth) / Double(rotated.width), Double(targetHeight) / Double(rotated.height))
-                : max(Double(targetWidth) / Double(rotated.width), Double(targetHeight) / Double(rotated.height))
-            scaleX = scale
-            scaleY = scale
-            originX = (Double(targetWidth) - Double(rotated.width) * scale) / 2
-            originY = (Double(targetHeight) - Double(rotated.height) * scale) / 2
+        let scale = fit == .stretch ? 0 : (fit == .contain
+            ? min(Double(targetWidth) / Double(rotated.width), Double(targetHeight) / Double(rotated.height))
+            : max(Double(targetWidth) / Double(rotated.width), Double(targetHeight) / Double(rotated.height)))
+        var scaledWidth = fit == .stretch ? targetWidth : max(1, Int((Double(rotated.width) * scale).rounded()))
+        var scaledHeight = fit == .stretch ? targetHeight : max(1, Int((Double(rotated.height) * scale).rounded()))
+        if fit == .contain {
+            scaledWidth = min(targetWidth, scaledWidth)
+            scaledHeight = min(targetHeight, scaledHeight)
+        } else if fit == .cover {
+            scaledWidth = max(targetWidth, scaledWidth)
+            scaledHeight = max(targetHeight, scaledHeight)
         }
-
+        let left = (targetWidth - scaledWidth) / 2
+        let top = (targetHeight - scaledHeight) / 2
         var output = [UInt8](repeating: 0, count: targetWidth * targetHeight * 3)
         for y in 0..<targetHeight {
+            let scaledY = y - top
+            guard scaledY >= 0, scaledY < scaledHeight else { continue }
+            let sourceY = min(rotated.height - 1,
+                              Int((Double(scaledY) + 0.5) * Double(rotated.height) / Double(scaledHeight)))
             for x in 0..<targetWidth {
-                let sx = (Double(x) + 0.5 - originX) / scaleX - 0.5
-                let sy = (Double(y) + 0.5 - originY) / scaleY - 0.5
-                guard sx >= -0.5, sx < Double(rotated.width) - 0.5,
-                      sy >= -0.5, sy < Double(rotated.height) - 0.5 else { continue }
-                let x0 = max(0, min(rotated.width - 1, Int(floor(sx))))
-                let y0 = max(0, min(rotated.height - 1, Int(floor(sy))))
-                let x1 = min(rotated.width - 1, x0 + 1)
-                let y1 = min(rotated.height - 1, y0 + 1)
-                let fx = max(0, min(1, sx - Double(x0)))
-                let fy = max(0, min(1, sy - Double(y0)))
-                for channel in 0..<3 {
-                    let p00 = Double(rotated.bytes[(y0 * rotated.width + x0) * 3 + channel])
-                    let p10 = Double(rotated.bytes[(y0 * rotated.width + x1) * 3 + channel])
-                    let p01 = Double(rotated.bytes[(y1 * rotated.width + x0) * 3 + channel])
-                    let p11 = Double(rotated.bytes[(y1 * rotated.width + x1) * 3 + channel])
-                    let top = p00 + (p10 - p00) * fx
-                    let bottom = p01 + (p11 - p01) * fx
-                    output[(y * targetWidth + x) * 3 + channel] = UInt8((top + (bottom - top) * fy).rounded())
-                }
+                let scaledX = x - left
+                guard scaledX >= 0, scaledX < scaledWidth else { continue }
+                let sourceX = min(rotated.width - 1,
+                                  Int((Double(scaledX) + 0.5) * Double(rotated.width) / Double(scaledWidth)))
+                let from = (sourceY * rotated.width + sourceX) * 3
+                let to = (y * targetWidth + x) * 3
+                output[to] = rotated.bytes[from]
+                output[to + 1] = rotated.bytes[from + 1]
+                output[to + 2] = rotated.bytes[from + 2]
             }
         }
         return RGBFrame(width: targetWidth, height: targetHeight, bytes: output)

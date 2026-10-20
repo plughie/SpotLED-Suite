@@ -1,10 +1,19 @@
 # iOS SpotLED Companion
 
-The iOS companion is foreground-only: discover `SpotLED_*` displays, preview
-and send text or still images, and report transfer acknowledgments. Text offers
-Normal (captured native 16×16 panel glyphs) and Raster modes; rotated text uses
-raster pixels. MQTT, scheduled weather, and background notification forwarding
-are intentionally excluded from the iOS app.
+The iOS companion follows Android's foreground send contract: discover/select
+`SpotLED_*` displays, send text or images, and report transfer acknowledgments.
+It includes the same text colors/effects, five speeds, Normal/Raster choice,
+themes, About credits, image transforms, remembered display, send-time discovery,
+and still/animated image previews. Rotated text uses raster pixels. The app uses
+the same launcher artwork as Android.
+
+Animated GIFs are sampled to two frames to match Android and fit the observed
+full-color transfer budget. Preview and send use those same transformed frames
+at the same shared 250–1,000 ms interval. Input is capped at 50 MB and downsampled
+to at most 4 MP before panel rasterization. Device capabilities are not queried
+yet; this implementation retains the Android app's tested 64×16 limits. MQTT,
+clock/weather, background notification forwarding, and any other background BLE
+work are intentionally Android-only.
 
 ## Build
 

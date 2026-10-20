@@ -5,6 +5,46 @@ notes are preserved in [PROJECT_HISTORY.md](PROJECT_HISTORY.md).
 
 ## [Unreleased]
 
+- Resolve the core P0 reliability gaps: NOAA-only SpotLED-MQTT runs without MQTT,
+  its clock worker survives upload failures, and broker reconnect is
+  asynchronous. Add iOS transfer-session tokens, cleanup on disconnect,
+  cancel/background/power-off handling and peripheral quarantine after a
+  disconnect timeout. Python MQTT tests pass (32); iOS app and test targets
+  compile, while simulator test execution remains inconclusive. No iOS release
+  artifact was created.
+- Coalesce bursts of minute/weather/speed dirty events before rasterizing and
+  sending a ClockTemp status snapshot. NOAA quarter-hour polling now runs inside
+  the minute refresh cycle to avoid a second nearby clock redraw. The finite
+  icon animation runs only on a weather-condition change; ordinary minute ticks
+  use one static frame. The weather-change animation still primes its persistent
+  base frame before the two-frame playback. All 36 MQTT tests pass.
+- Tighten the remaining backlog: remove completed-feature descriptions from
+  open tasks, retire superseded troubleshooting into history, and list pending
+  validation separately from missing implementation.
+- Reconcile TODO with current source and recorded validations: move 151 completed
+  checklist entries into PROJECT_HISTORY, separate completed implementations
+  from outstanding acceptance checks, correct stale iOS descriptions, and merge
+  duplicate remaining work into one prioritized backlog. No new runtime or
+  hardware validation is claimed by this documentation update.
+- Bring the iOS foreground Companion closer to Android parity: persist the five
+  text speeds, themes, rendering choice and selected display; add About credits,
+  send-time discovery and a bounded safe connection retry; preserve native
+  lowercase and match Android's full compact raster glyph table. Add bounded,
+  orientation-aware ImageIO input and matching nearest-neighbor fitting, with a
+  two-frame animated GIF preview/transfer at the Android-safe shared interval.
+  App and simulator-test targets compile; Xcode simulator test execution is
+  inconclusive because its test-session cleanup stalls. No iOS release or
+  display-content validation is claimed. Background service features remain
+  excluded by contract.
+- Audit iOS, Android and Python/bridge differences and add a dependency-ordered
+  cross-platform roadmap to TODO: transfer cleanup, service outage recovery,
+  shared regression fixtures, text/rendering consistency, iOS workflow parity,
+  capability-aware animation and grouped Wishlist follow-ons. Source review
+  only; no runtime changes or additional hardware validation in this audit.
+- Reuse the Android launcher artwork for the iOS app icon through an iOS asset
+  catalog; install the development build on the paired iPhone. No iOS release
+  binary was produced.
+
 ## [0.19.6] - 2026-10-18
 
 - Add a foreground-only iOS companion source project with `SpotLED_*` discovery,

@@ -7,12 +7,11 @@ feature still needs implementation.
 
 ## P0 — Reliability fixes
 
-- [ ] Scope iOS BLE callbacks/timeouts to individual transfer sessions; add
-  explicit user cancellation and background/power-off cleanup.
-- [ ] Allow Python NOAA clock/weather operation without an MQTT broker or
-  notification topic; start independent workers before broker connection.
-- [ ] Catch/supervise Python clock-upload worker failures so a temporary BLE
-  outage does not permanently stop updates.
+- [ ] Add simulator failure-injection tests for iOS BLE timeout, stale callback,
+  disconnect during chunk writes, explicit/background cancellation, power-off,
+  and successful subsequent send. Session-scoped timers/callback guards,
+  continuation cleanup, and cancellation are implemented; simulator test
+  execution has not returned results.
 
 ## P1 — Remaining foreground and protocol gaps
 
@@ -21,7 +20,7 @@ feature still needs implementation.
 - [ ] Resolve Xcode simulator test-session cleanup stalls and obtain a completed
   test run.
 - [ ] Add shared language-neutral packet/font/transform fixtures and automated
-  Python/JVM/Swift checks; add failure-injection coverage for BLE sessions.
+  Python/JVM/Swift checks so cross-platform encoding stays aligned.
 - [ ] Generate glyph tables/overrides from one source rather than copied tables.
 - [ ] Resolve remaining fallback differences: Python native 5×7 versus mobile
   3×5, plus unsupported-BMP replacement/codepoint behavior.
@@ -42,7 +41,8 @@ feature still needs implementation.
 - [ ] Decide/document the Python area-average versus mobile nearest-neighbor
   resampling policy.
 - [ ] Bound Python's pending-alert deque and Android's display executor backlog;
-  expose queue/drop counts and weather freshness.
+  expose queue/drop counts and weather freshness. Python now coalesces bursts of
+  clock/weather/speed dirty events into one composed status refresh.
 - [ ] Add a clear manual-controller handoff and optional same-host process lock;
   do not present a local lock as cross-phone ownership.
 - [ ] Add offline CLI dry-run/inspect and separate phone Preview/Send actions.
@@ -62,11 +62,20 @@ feature still needs implementation.
 - [ ] Confirm the iOS text/image/GIF transfer matrix, speed choices and target
   restore/pending-send behavior. Keep the existing icon and capital-I-height
   confirmations; do not repeat them as open tasks.
-- [ ] Exercise iOS lifecycle failure cases: timeout, late callback, power-off,
-  disconnect during writes, cancellation and a successful subsequent send.
+- [x] User reports manual iOS lifecycle checks passed: unavailable-display
+  timeout/recovery, Bluetooth/background interruption, cancellation and a
+  successful subsequent send. Late-callback and disconnect/write race injection
+  remain in the automated P0 test item above.
 - [ ] Test image/GIF edge cases across platforms: transparency, mirrored camera
   orientation, rapid reselection, odd-sized crops and variable GIF delays.
   Preserve the already-confirmed Android/Python rotation, fit and GIF results.
+- [ ] Resolve intermittent panel-refresh discrepancy: service logs contain one
+  composed update at 21:39, 21:42, and 21:45; user observed two visible refreshes
+  at 21:39 and one at 21:42. On shutdown, buffered output flushed repeated pairs
+  of static-frame and two-frame-animation acknowledgments; their exact minute
+  association is unknown. The 21:45 panel result was not observed. Determine
+  when icon-animation uploads are triggered and confirm routine updates do not
+  cause adjacent duplicate redraws.
 - [ ] Complete only the still-unconfirmed Android effects/palette cases and,
   if used, MQTT raster-mode comparison.
 - [ ] Review iOS Dynamic Type, VoiceOver and Bluetooth-denied behavior.

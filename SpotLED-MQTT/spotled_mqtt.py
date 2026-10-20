@@ -31,9 +31,11 @@ except ImportError:  # Keep pure parsing helpers importable for tests.
 LOG = logging.getLogger("spotled_mqtt")
 DISMISS = object()
 CLOCK_REFRESH = object()
+_CLOCK_REFRESH_QUEUED = object()
 ICON_X = 56
 ICON_SIZE = 8
 ICON_FRAME_INTERVAL_MS = 500
+CLOCK_REFRESH_COALESCE_SECONDS = 0.2
 
 WEATHER_ICON_NAMES = {
     "sunny": "sunny", "clear-night": "clear-night", "partlycloudy": "partlycloudy",
@@ -548,7 +550,10 @@ class SpotLedMqttService:
         except ValueError as exc:
             raise ValueError(f"Invalid SpotLED text setting: {exc}") from exc
         self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=100)
+        self._clock_refresh_queued = False
         self.latest_weather: Weather | None = None
+        self._weather_revision = 0
+        self._animated_weather_revision = 0
         self.latest_indoor_temperature: float | None = None
         self.latest_speed_mbps: float | None = None
         self._noaa_config_warning_shown = False
@@ -558,35 +563,74 @@ class SpotLedMqttService:
     def _now(self) -> datetime:
         return datetime.now(self.clock_timezone) if self.clock_timezone else datetime.now().astimezone()
 
+    def _set_latest_weather(self, weather: Weather) -> None:
+        if self.latest_weather is None or self.latest_weather.condition != weather.condition:
+            self._weather_revision += 1
+        self.latest_weather = weather
+
     def _threadsafe_enqueue(self, item: Any) -> None:
         if self.loop is None:
             return
 
         def enqueue() -> None:
+            queued_item = item
+            if item is CLOCK_REFRESH:
+                if self._clock_refresh_queued:
+                    return
+                self._clock_refresh_queued = True
+                queued_item = _CLOCK_REFRESH_QUEUED
             try:
-                self.queue.put_nowait(item)
+                self.queue.put_nowait(queued_item)
             except asyncio.QueueFull:
+                if item is CLOCK_REFRESH:
+                    self._clock_refresh_queued = False
                 LOG.warning("Display queue is full; dropping the newest MQTT event")
 
         self.loop.call_soon_threadsafe(enqueue)
+
+    def _consume_queue_item(self, item: Any) -> Any:
+        if item is _CLOCK_REFRESH_QUEUED:
+            self._clock_refresh_queued = False
+            return CLOCK_REFRESH
+        return item
+
+    async def _coalesce_clock_refresh_burst(self, pending: deque[Any]) -> None:
+        # Gather same-tick weather/speed/clock updates before rasterizing and
+        # sending one snapshot of the newest state. Preserve other queue events.
+        await asyncio.sleep(CLOCK_REFRESH_COALESCE_SECONDS)
+        while True:
+            try:
+                item = self._consume_queue_item(self.queue.get_nowait())
+            except asyncio.QueueEmpty:
+                return
+            if item is not CLOCK_REFRESH:
+                pending.append(item)
 
     def _on_connect(self, client, userdata, flags, reason_code, properties) -> None:
         if getattr(reason_code, "is_failure", False):
             LOG.error("MQTT connection rejected: %s", reason_code)
             return
-        topics = [(self.notify_topic, 0),
-                  (self.notify_topic + "/dismiss", 0),
-                  (self.notify_topic + "/dismiss/+", 0)]
+        topics = []
+        if self.notify_topic:
+            topics.extend(((self.notify_topic, 0),
+                           (self.notify_topic + "/dismiss", 0),
+                           (self.notify_topic + "/dismiss/+", 0)))
         if self.weather_source == "homeassistant" and self.speed_topic:
             topics.append((self.speed_topic, 0))
         if self.weather_source == "homeassistant":
             topics.append((self.weather_topic, 0))
-        client.subscribe(topics)
+        if topics:
+            client.subscribe(topics)
         extra_topics = [topic for topic in (self.speed_topic if self.weather_source == "homeassistant" else "",
                                             self.weather_topic if self.weather_source == "homeassistant" else "")
                         if topic]
-        LOG.info("Connected to MQTT; subscribed to notifications%s",
-                 f" and {', '.join(extra_topics)}" if extra_topics else "")
+        subscription_summary = []
+        if self.notify_topic:
+            subscription_summary.append("notifications")
+        subscription_summary.extend(extra_topics)
+        LOG.info("Connected to MQTT%s",
+                 "; subscribed to " + ", ".join(subscription_summary)
+                 if subscription_summary else "; no topics configured")
 
     def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties) -> None:
         if getattr(reason_code, "is_failure", False):
@@ -603,11 +647,11 @@ class SpotLedMqttService:
         elif self.weather_source == "homeassistant" and message.topic == self.weather_topic:
             weather = parse_weather(message.payload)
             if weather is not None:
-                self.latest_weather = weather
+                self._set_latest_weather(weather)
                 self._threadsafe_enqueue(CLOCK_REFRESH)
             else:
                 LOG.warning("Ignoring invalid Home Assistant weather payload")
-        elif message.topic == self.notify_topic:
+        elif self.notify_topic and message.topic == self.notify_topic:
             notification = parse_notification(message.payload)
             if notification is None:
                 LOG.warning("Ignoring invalid/empty notification on %s", message.topic)
@@ -615,25 +659,21 @@ class SpotLedMqttService:
                 if "icon" in _safe_json(message.payload) or "sound" in _safe_json(message.payload):
                     LOG.info("SpotLED currently renders notification text/color only; icon/sound fields are ignored")
                 self._threadsafe_enqueue(notification)
-        elif message.topic.startswith(self.notify_topic + "/dismiss"):
+        elif self.notify_topic and message.topic.startswith(self.notify_topic + "/dismiss"):
             self._threadsafe_enqueue(DISMISS)
 
     async def _clock_schedule(self) -> None:
-        # ClockTemp002 polls the TC001; refresh it on startup and with each minute tick.
+        # Gather all periodic state first, then request one composed display refresh.
+        first_refresh = True
         while True:
             await self._refresh_indoor_temperature()
+            now = self._now()
+            if (self.weather_source == "noaa"
+                    and (first_refresh or now.minute % 15 == 0)):
+                await self._refresh_noaa()
+            first_refresh = False
             self._threadsafe_enqueue(CLOCK_REFRESH)
             await asyncio.sleep(seconds_until_next_minute(self._now()))
-
-    async def _weather_schedule(self) -> None:
-        if self.weather_source == "homeassistant":
-            # MQTT retained state supplies the initial value; further updates are pushed.
-            return
-        # Fetch once on startup, then on wall-clock quarter hours (00, 15, 30, 45).
-        await self._refresh_noaa()
-        while True:
-            await asyncio.sleep(seconds_until_next_quarter_hour(self._now()))
-            await self._refresh_noaa()
 
     async def _refresh_noaa(self) -> None:
         if not self.noaa_station:
@@ -654,8 +694,7 @@ class SpotLedMqttService:
         if weather is None:
             LOG.warning("NOAA returned invalid or unavailable latest observation")
             return
-        self.latest_weather = weather
-        self._threadsafe_enqueue(CLOCK_REFRESH)
+        self._set_latest_weather(weather)
 
     async def _refresh_indoor_temperature(self) -> None:
         if not self.indoor_url:
@@ -682,7 +721,9 @@ class SpotLedMqttService:
             speed, self.weather_unit,
         )
         LOG.info("Updating ClockTemp status: %s", status)
-        if len(frames) > 1:
+        weather_revision = self._weather_revision
+        animate_weather_change = weather_revision != self._animated_weather_revision
+        if len(frames) > 1 and animate_weather_change:
             # A finite animation returns to the frame stored before playback.
             # Store the composed moon/weather frame first so that it remains visible.
             await send_rgb_frame(
@@ -698,6 +739,8 @@ class SpotLedMqttService:
                 frames[0], width=64, height=16, device_name=self.device_name,
                 frame_time_ms=1000,
             )
+        if weather_revision == self._weather_revision:
+            self._animated_weather_revision = weather_revision
 
     async def _send(self, text: str, color: tuple[int, int, int]) -> None:
         LOG.info("Sending to %s with %s effect: %s", self.device_name,
@@ -716,6 +759,7 @@ class SpotLedMqttService:
                 item = await asyncio.wait_for(self.queue.get(), timeout=timeout)
             except asyncio.TimeoutError:
                 return None
+            item = self._consume_queue_item(item)
             if item is DISMISS:
                 LOG.info("Active notification dismissed")
                 return None
@@ -732,11 +776,13 @@ class SpotLedMqttService:
         pending: deque[Any] = deque()
         while True:
             item = pending.popleft() if pending else await self.queue.get()
+            item = self._consume_queue_item(item)
             if item is CLOCK_REFRESH:
-                await self._show_clock()
+                await self._coalesce_clock_refresh_burst(pending)
+                await self._safe_show_clock()
                 continue
             if item is DISMISS:
-                await self._show_clock()
+                await self._safe_show_clock()
                 continue
 
             notification = item
@@ -749,61 +795,78 @@ class SpotLedMqttService:
 
             # Like AWTRIX notifications, return to the base ClockTemp display once
             # alerts drain. Stacked notifications run before this refresh.
+            await self._coalesce_clock_refresh_burst(pending)
             if not any(isinstance(queued, Notification) for queued in pending):
                 pending = deque(item for item in pending if item is not CLOCK_REFRESH)
-                await self._show_clock()
+                await self._safe_show_clock()
 
-    async def run(self) -> None:
-        if not self.host:
-            raise RuntimeError("Set MQTT_HOST to the address of your MQTT broker")
-        if not self.notify_topic:
-            raise RuntimeError("Set MQTT_NOTIFY_TOPIC to your AWTRIX notification command topic")
-        if not self.device_name:
-            raise RuntimeError("Set SPOTLED_DEVICE_NAME to the display's advertised name")
-        if mqtt is None:
-            raise RuntimeError("Missing paho-mqtt; install the SpotLED-MQTT requirements.txt")
-        self.loop = asyncio.get_running_loop()
-        self.client = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            client_id=self.client_id,
-            protocol=mqtt.MQTTv311,
-        )
-        if self.username:
-            self.client.username_pw_set(self.username, self.password)
-        if os.environ.get("MQTT_TLS", "false").lower() in {"1", "true", "yes", "on"}:
-            self.client.tls_set()
-        self.client.reconnect_delay_set(min_delay=1, max_delay=60)
-        self.client.on_connect = self._on_connect
-        self.client.on_disconnect = self._on_disconnect
-        self.client.on_message = self._on_message
-        LOG.info("Connecting to MQTT broker %s:%d", self.host, self.port)
-        LOG.info("Using %s weather source", self.weather_source)
+    async def _safe_show_clock(self) -> None:
+        try:
+            await self._show_clock()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Do not let a transient BLE/encoding failure kill the display queue.
+            # The next scheduled clock or weather refresh will try the latest state.
+            LOG.exception("Could not display the ClockTemp frame; retaining the latest state")
+
+    async def _supervise(self, name: str, worker_factory: Callable[[], Any]) -> None:
         while True:
             try:
-                await asyncio.to_thread(self.client.connect, self.host, self.port, 60)
-                break
-            except OSError as exc:
-                LOG.warning("MQTT broker unavailable (%s); retrying in 5 seconds", exc)
+                await worker_factory()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOG.exception("%s worker failed; restarting in 5 seconds", name)
                 await asyncio.sleep(5)
-        self.client.loop_start()
+
+    async def run(self) -> None:
+        if not self.device_name:
+            raise RuntimeError("Set SPOTLED_DEVICE_NAME to the display's advertised name")
+        if self.weather_source == "homeassistant" and not self.host:
+            raise RuntimeError("Set MQTT_HOST when using Home Assistant weather")
+        if self.host and mqtt is None:
+            raise RuntimeError("Missing paho-mqtt; install the SpotLED-MQTT requirements.txt")
+        self.loop = asyncio.get_running_loop()
+        if self.host:
+            self.client = mqtt.Client(
+                callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+                client_id=self.client_id,
+                protocol=mqtt.MQTTv311,
+            )
+            if self.username:
+                self.client.username_pw_set(self.username, self.password)
+            if os.environ.get("MQTT_TLS", "false").lower() in {"1", "true", "yes", "on"}:
+                self.client.tls_set()
+            self.client.reconnect_delay_set(min_delay=1, max_delay=60)
+            self.client.on_connect = self._on_connect
+            self.client.on_disconnect = self._on_disconnect
+            self.client.on_message = self._on_message
+            LOG.info("Starting asynchronous MQTT connection to %s:%d", self.host, self.port)
+            self.client.connect_async(self.host, self.port, 60)
+            self.client.loop_start()
+        else:
+            LOG.info("Starting NOAA-only mode without MQTT")
         stop_event = asyncio.Event()
         for signum in (signal.SIGINT, signal.SIGTERM):
             try:
                 self.loop.add_signal_handler(signum, stop_event.set)
             except (NotImplementedError, RuntimeError):
                 pass
-        worker = asyncio.create_task(self._run(), name="spotled-display-queue")
-        clock_scheduler = asyncio.create_task(self._clock_schedule(), name="spotled-clock-refresh")
-        weather_scheduler = asyncio.create_task(self._weather_schedule(), name="spotled-weather-refresh")
+        worker = asyncio.create_task(self._supervise("display", self._run),
+                                     name="spotled-display-queue")
+        clock_scheduler = asyncio.create_task(self._supervise("clock", self._clock_schedule),
+                                              name="spotled-clock-refresh")
         try:
             await stop_event.wait()
         finally:
             worker.cancel()
             clock_scheduler.cancel()
-            weather_scheduler.cancel()
-            await asyncio.gather(worker, clock_scheduler, weather_scheduler, return_exceptions=True)
-            self.client.disconnect()
-            self.client.loop_stop()
+            await asyncio.gather(worker, clock_scheduler, return_exceptions=True)
+            if self.client is not None:
+                self.client.disconnect()
+                self.client.loop_stop()
 
 
 def _safe_json(payload: bytes) -> dict[str, Any]:

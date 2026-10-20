@@ -4,9 +4,10 @@ SpotLED Suite is a set of tools for sending text, images, and animated GIFs to a
 64×16 SpotLED display. It includes a Python command-line sender, the Android
 SpotLED Companion app, and SpotLED-MQTT, a service that displays MQTT alerts and
 clock/weather information. Android also supports an optional foreground
-clock/weather/MQTT service. The iOS companion is in early development and is
-limited to foreground text/image transfers; MQTT and background weather are
-intentionally excluded.
+clock/weather/MQTT service. The iOS companion supports foreground text and still
+or animated image transfers; MQTT, clock/weather and background notifications
+remain Android-only by contract. Each iOS contributor signs and deploys their
+own local build.
 
 ## Installation
 
@@ -40,8 +41,9 @@ permissions, and build details.
 
 ### SpotLED-MQTT service
 
-The service needs MQTT network access and BLE radio range to the display. Create
-its virtual environment and local configuration file:
+The service needs BLE radio range to the display. MQTT network access is needed
+only for Home Assistant weather or optional AWTRIX alerts; NOAA-only mode can
+run without a broker. Create its virtual environment and local configuration:
 
 ```sh
 cd SpotLED-Suite/SpotLED-MQTT
@@ -54,8 +56,9 @@ cp env.sh.example env.sh
 Edit `env.sh` with your broker, topic, and display settings, then start the
 service manually with `python spotled_mqtt.py --weather-source noaa` or
 `python spotled_mqtt.py --weather-source homeassistant`. The ignored `env.sh`
-stays local and is not committed. See the [MQTT guide](SpotLED-MQTT/README.md)
-for all options and lifecycle controls.
+stays local and is not committed. For NOAA-only clock/weather, `MQTT_HOST` and
+notification topic may remain blank; Home Assistant mode needs a broker and
+weather topic. See the [MQTT guide](SpotLED-MQTT/README.md) for all options.
 
 ### Android Companion
 

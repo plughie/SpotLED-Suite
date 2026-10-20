@@ -10,6 +10,14 @@ final class SpotLEDProtocolTests: XCTestCase {
         XCTAssertEqual(Array(payload[19...20]), [0, 11])
     }
 
+    func testTwoFrameAnimationUsesAndroidFrameAndTimingObjects() throws {
+        let pixels = [UInt8](repeating: 0, count: 64 * 16 * 3)
+        let payload = try SpotLEDProtocol.buildRGBAnimationPayload([pixels, pixels], intervalMs: 500)
+        XCTAssertEqual(payload.count, 6_210)
+        XCTAssertEqual(Array(payload[21...22]), [0, 2])
+        XCTAssertLessThanOrEqual(payload.count, SpotLEDProtocol.maxReceiveBytes)
+    }
+
     func testNativeTextCreatesSeparateFontAndCharacterTransfers() throws {
         let payloads = try SpotLEDProtocol.buildNativeTextPayloads("A", color: .white, effectMode: 3)
         XCTAssertEqual(payloads.count, 2)
@@ -19,10 +27,21 @@ final class SpotLEDProtocolTests: XCTestCase {
         XCTAssertEqual(Array(payloads[1][4...5]), [0x80, 0x04])
     }
 
-    func testUnsupportedUnicodeGetsQuestionMarkFallback() throws {
-        let payloads = try SpotLEDProtocol.buildNativeTextPayloads("A 🦆", color: .rainbow, effectMode: 6)
-        XCTAssertEqual(payloads.count, 2)
-        XCTAssertLessThan(payloads[0].count, SpotLEDProtocol.maxReceiveBytes)
+    func testNativeTextPreservesLowercaseAndRequestedSpeed() throws {
+        let payloads = try SpotLEDProtocol.buildNativeTextPayloads(
+            "a", color: .white, effectMode: 3, intervalMs: 150)
+        let glyphOffset = 15 + 9
+        XCTAssertEqual(payloads[0][glyphOffset + 12], UInt8(ascii: "a"))
+        XCTAssertNotNil(Data(payloads[1]).range(of: Data([0, 7, 0, 0, 0, 150])))
+    }
+
+    func testNonBMPNativeTextIsRejectedExplicitly() {
+        XCTAssertThrowsError(try SpotLEDProtocol.buildNativeTextPayloads(
+            "A 🦆", color: .rainbow, effectMode: 6)) { error in
+                guard case SpotLEDProtocolError.unsupportedUnicode = error else {
+                    return XCTFail("Expected an explicit non-BMP text error")
+                }
+            }
     }
 
     func testTextPreviewIsA64By16RGBFrame() {
@@ -39,7 +58,10 @@ final class SpotLEDProtocolTests: XCTestCase {
         XCTAssertEqual(frame.height, 16)
         XCTAssertEqual(frame.bytes.count, 64 * 16 * 3)
         XCTAssertTrue(frame.bytes.contains(where: { $0 != 0 }))
-        XCTAssertTrue(frame.bytes[(16 * 16 * 3)...].allSatisfy { $0 == 0 })
+        for row in 0..<16 {
+            let rightOfFirstCell = row * 64 * 3 + 16 * 3
+            XCTAssertTrue(frame.bytes[rightOfFirstCell..<(row + 1) * 64 * 3].allSatisfy { $0 == 0 })
+        }
     }
 
     func testCapitalINativeGlyphHasSerifs() {

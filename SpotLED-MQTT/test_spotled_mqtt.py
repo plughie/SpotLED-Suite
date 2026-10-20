@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from spotled_mqtt import (
+    CLOCK_REFRESH,
+    CLOCK_REFRESH_COALESCE_SECONDS,
     Notification,
     SpotLedMqttService,
     Weather,
@@ -179,21 +181,30 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual(seconds_until_next_quarter_hour(datetime(2026, 1, 1, 12, 30)), 900)
         self.assertEqual(seconds_until_next_quarter_hour(datetime(2026, 1, 1, 12, 59, 30)), 30)
 
-    def test_weather_scheduler_fetches_at_startup_then_waits_for_quarter_hour(self):
+    def test_noaa_is_gathered_with_the_clock_refresh_at_quarter_hours(self):
         service = SpotLedMqttService(weather_source="noaa")
-        service._now = lambda: datetime(2026, 1, 1, 12, 14, 30)
+        now_values = iter((datetime(2026, 1, 1, 12, 14, 30),
+                           datetime(2026, 1, 1, 12, 14, 30),
+                           datetime(2026, 1, 1, 12, 15, 5),
+                           datetime(2026, 1, 1, 12, 15, 5)))
+        service._now = lambda: next(now_values)
+        service._refresh_indoor_temperature = AsyncMock()
         service._refresh_noaa = AsyncMock()
+        service._threadsafe_enqueue = Mock()
         with patch("spotled_mqtt.asyncio.sleep",
-                   new=AsyncMock(side_effect=asyncio.CancelledError)) as sleep:
+                   new=AsyncMock(side_effect=[None, asyncio.CancelledError])) as sleep:
             with self.assertRaises(asyncio.CancelledError):
-                asyncio.run(service._weather_schedule())
-        service._refresh_noaa.assert_awaited_once()
-        sleep.assert_awaited_once_with(30)
+                asyncio.run(service._clock_schedule())
+        self.assertEqual(service._refresh_noaa.await_count, 2)
+        self.assertEqual(service._refresh_indoor_temperature.await_count, 2)
+        self.assertEqual(service._threadsafe_enqueue.call_count, 2)
+        self.assertEqual([call.args[0] for call in sleep.await_args_list], [30, 55])
 
     def test_clock_scheduler_fetches_indoor_on_startup_and_waits_to_minute(self):
         service = SpotLedMqttService()
         service._now = lambda: datetime(2026, 1, 1, 12, 34, 15, 500_000)
         service._refresh_indoor_temperature = AsyncMock()
+        service._refresh_noaa = AsyncMock()
         service._threadsafe_enqueue = Mock()
         with patch("spotled_mqtt.asyncio.sleep",
                    new=AsyncMock(side_effect=asyncio.CancelledError)) as sleep:
@@ -202,6 +213,66 @@ class PayloadTests(unittest.TestCase):
         service._refresh_indoor_temperature.assert_awaited_once()
         service._threadsafe_enqueue.assert_called_once()
         sleep.assert_awaited_once_with(44.5)
+        service._refresh_noaa.assert_awaited_once()
+
+    def test_burst_of_clock_refresh_triggers_is_coalesced(self):
+        async def exercise():
+            service = SpotLedMqttService(weather_source="noaa")
+            service.loop = asyncio.get_running_loop()
+            first_started = asyncio.Event()
+            allow_first_finish = asyncio.Event()
+            second_finished = asyncio.Event()
+            calls = 0
+
+            async def show_clock():
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    first_started.set()
+                    await allow_first_finish.wait()
+                elif calls == 2:
+                    second_finished.set()
+
+            service._show_clock = show_clock
+            worker = asyncio.create_task(service._run())
+            service._threadsafe_enqueue(CLOCK_REFRESH)
+            await asyncio.wait_for(first_started.wait(), timeout=1)
+            for _ in range(5):
+                service._threadsafe_enqueue(CLOCK_REFRESH)
+            allow_first_finish.set()
+            await asyncio.wait_for(second_finished.wait(), timeout=1)
+            await asyncio.sleep(0)
+            worker.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await worker
+            self.assertEqual(calls, 2)
+
+        asyncio.run(exercise())
+
+    def test_pre_send_clock_refresh_burst_renders_one_snapshot(self):
+        async def exercise():
+            service = SpotLedMqttService(weather_source="noaa")
+            service.loop = asyncio.get_running_loop()
+            rendered = asyncio.Event()
+            calls = 0
+
+            async def show_clock():
+                nonlocal calls
+                calls += 1
+                rendered.set()
+
+            service._show_clock = show_clock
+            for _ in range(6):
+                service._threadsafe_enqueue(CLOCK_REFRESH)
+            worker = asyncio.create_task(service._run())
+            await asyncio.wait_for(rendered.wait(), timeout=1)
+            await asyncio.sleep(CLOCK_REFRESH_COALESCE_SECONDS * 2)
+            worker.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await worker
+            self.assertEqual(calls, 1)
+
+        asyncio.run(exercise())
 
     def test_weather_color_matches_wetter_temperature_ramp_endpoints(self):
         self.assertEqual(weather_color(10.4), (217, 119, 223))  # -12 C
@@ -263,7 +334,10 @@ class PayloadTests(unittest.TestCase):
         service._threadsafe_enqueue.assert_called_once()
 
     def test_noaa_source_omits_home_assistant_speed_bar(self):
-        with patch.dict("os.environ", {"MQTT_SPEED_TOPIC": "speed/results"}):
+        with patch.dict("os.environ", {
+            "MQTT_SPEED_TOPIC": "speed/results",
+            "MQTT_NOTIFY_TOPIC": "awtrix/notify",
+        }):
             service = SpotLedMqttService(weather_source="noaa")
         client = Mock()
         service._on_connect(client, None, None, SimpleNamespace(is_failure=False), None)
@@ -282,9 +356,126 @@ class PayloadTests(unittest.TestCase):
         for pixels in frames:
             self.assertEqual(pixels[15 * 64 * 3:15 * 64 * 3 + 56 * 3], bytes(56 * 3))
 
+    def test_noaa_only_service_runs_without_broker_or_notification_topic(self):
+        async def run_noaa_only():
+            real_event = asyncio.Event
+
+            def scheduled_stop_event():
+                event = real_event()
+                asyncio.get_running_loop().call_later(0.05, event.set)
+                return event
+
+            with patch.dict("os.environ", {
+                    "SPOTLED_DEVICE_NAME": "SpotLED_TEST",
+                    "MQTT_HOST": "",
+                    "MQTT_NOTIFY_TOPIC": "",
+                    "NOAA_WEATHER_STATION": "",
+            }, clear=False), \
+                 patch("spotled_mqtt.mqtt", None), \
+                 patch("spotled_mqtt.asyncio.Event", side_effect=scheduled_stop_event):
+                service = SpotLedMqttService(weather_source="noaa")
+                service._refresh_noaa = AsyncMock()
+                service._show_clock = AsyncMock()
+                await service.run()
+            self.assertIsNone(service.client)
+            service._refresh_noaa.assert_awaited_once()
+
+        asyncio.run(run_noaa_only())
+
+    def test_home_assistant_requires_mqtt_but_notification_topic_is_optional(self):
+        with patch.dict("os.environ", {
+            "SPOTLED_DEVICE_NAME": "SpotLED_TEST",
+            "MQTT_HOST": "", "MQTT_NOTIFY_TOPIC": "",
+            "MQTT_WEATHER_TOPIC": "weather/state",
+        }):
+            service = SpotLedMqttService(weather_source="homeassistant")
+            with self.assertRaisesRegex(RuntimeError, "MQTT_HOST"):
+                asyncio.run(service.run())
+
+    def test_empty_notification_topic_does_not_subscribe_or_match_dismiss(self):
+        with patch.dict("os.environ", {"MQTT_NOTIFY_TOPIC": ""}):
+            service = SpotLedMqttService(weather_source="noaa")
+        client = Mock()
+        service._on_connect(client, None, None, SimpleNamespace(is_failure=False), None)
+        client.subscribe.assert_not_called()
+        service._threadsafe_enqueue = Mock()
+        service._on_message(None, None, SimpleNamespace(topic="/dismiss/all", payload=b"{}"))
+        service._threadsafe_enqueue.assert_not_called()
+
+    def test_mqtt_start_uses_async_reconnect_without_blocking_service_start(self):
+        async def start_and_stop():
+            stop_event = asyncio.Event()
+            stop_event.set()
+            client = Mock()
+            fake_mqtt = SimpleNamespace(
+                Client=Mock(return_value=client),
+                CallbackAPIVersion=SimpleNamespace(VERSION2=2),
+                MQTTv311=4,
+            )
+            with patch.dict("os.environ", {
+                    "SPOTLED_DEVICE_NAME": "SpotLED_TEST",
+                    "MQTT_HOST": "broker.invalid",
+                    "MQTT_NOTIFY_TOPIC": "",
+            }, clear=False), \
+                 patch("spotled_mqtt.mqtt", fake_mqtt), \
+                 patch("spotled_mqtt.asyncio.Event", return_value=stop_event):
+                service = SpotLedMqttService(weather_source="noaa")
+                await service.run()
+            client.connect_async.assert_called_once_with("broker.invalid", 1883, 60)
+            client.connect.assert_not_called()
+            client.loop_start.assert_called_once()
+            client.disconnect.assert_called_once()
+
+        asyncio.run(start_and_stop())
+
+    def test_clock_upload_failure_does_not_terminate_display_worker(self):
+        async def exercise():
+            service = SpotLedMqttService(weather_source="noaa")
+            first_failed = asyncio.Event()
+            recovered = asyncio.Event()
+            calls = 0
+
+            async def flaky_show_clock():
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    first_failed.set()
+                    raise OSError("temporary BLE failure")
+                recovered.set()
+
+            service._show_clock = flaky_show_clock
+            worker = asyncio.create_task(service._run())
+            await service.queue.put(CLOCK_REFRESH)
+            await asyncio.wait_for(first_failed.wait(), timeout=1)
+            await service.queue.put(CLOCK_REFRESH)
+            await asyncio.wait_for(recovered.wait(), timeout=1)
+            worker.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await worker
+            self.assertEqual(calls, 2)
+
+        with self.assertLogs("spotled_mqtt", level="ERROR"):
+            asyncio.run(exercise())
+
+    def test_worker_supervisor_restarts_unexpected_worker_failure(self):
+        service = SpotLedMqttService(weather_source="noaa")
+        calls = 0
+
+        async def flaky_worker():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("unexpected scheduler failure")
+
+        with self.assertLogs("spotled_mqtt", level="ERROR"), \
+             patch("spotled_mqtt.asyncio.sleep", new=AsyncMock()) as sleep:
+            asyncio.run(service._supervise("test", flaky_worker))
+        self.assertEqual(calls, 2)
+        sleep.assert_awaited_once_with(5)
+
     def test_clock_animation_primes_persistent_composed_frame_before_playback(self):
         service = SpotLedMqttService(weather_source="noaa")
-        service.latest_weather = Weather(60, "cloudy")
+        service._set_latest_weather(Weather(60, "cloudy"))
         first = bytes([1]) * (64 * 16 * 3)
         second = bytes([2]) * (64 * 16 * 3)
         events = []
@@ -304,6 +495,29 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual([event[0] for event in events], ["static", "animation"])
         self.assertEqual(events[0][1], first)
         self.assertEqual(events[1][1], [first, second])
+
+    def test_minute_clock_refresh_sends_one_static_frame_after_weather_animation(self):
+        service = SpotLedMqttService(weather_source="noaa")
+        service._set_latest_weather(Weather(60, "cloudy"))
+        service._animated_weather_revision = service._weather_revision
+        frame = bytes([3]) * (64 * 16 * 3)
+        with patch("spotled_mqtt.render_clocktemp_animation_frames", return_value=[frame, bytes([4]) * len(frame)]), \
+             patch("spotled_mqtt.send_rgb_frame", new=AsyncMock()) as static_sender, \
+             patch("spotled_mqtt.send_rgb_animation", new=AsyncMock()) as animation_sender:
+            asyncio.run(service._show_clock())
+        static_sender.assert_awaited_once()
+        animation_sender.assert_not_awaited()
+
+    def test_new_weather_condition_requests_icon_animation(self):
+        service = SpotLedMqttService(weather_source="noaa")
+        initial_revision = service._weather_revision
+        service._set_latest_weather(Weather(60, "sunny"))
+        self.assertGreater(service._weather_revision, initial_revision)
+        first_revision = service._weather_revision
+        service._set_latest_weather(Weather(61, "sunny"))
+        self.assertEqual(service._weather_revision, first_revision)
+        service._set_latest_weather(Weather(61, "rainy"))
+        self.assertGreater(service._weather_revision, first_revision)
 
 
 if __name__ == "__main__":
