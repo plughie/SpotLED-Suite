@@ -7,12 +7,199 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
+import org.json.JSONObject;
 
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Iterator;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 
 public class SpotLedProtocolTest {
+    @Test public void imageImportBoundsAndExifOrientationMappingsAreCorrect() {
+        assertEquals(1, ImageImportPolicy.sampleSize(64, 16));
+        assertEquals(2, ImageImportPolicy.sampleSize(4000, 3000));
+        assertEquals(32, ImageImportPolicy.sampleSize(40000, 30000));
+        assertThrows(IllegalArgumentException.class, () -> ImageImportPolicy.sampleSize(0, 10));
+        assertThrows(IllegalArgumentException.class, () -> ImageImportPolicy.sampleSize(50000, 50000));
+        assertArrayEquals(new int[] {4000, 3000}, ImageImportPolicy.orientedSize(4000, 3000, 1));
+        assertArrayEquals(new int[] {3000, 4000}, ImageImportPolicy.orientedSize(4000, 3000, 6));
+        assertArrayEquals(new int[] {3, 0}, ImageImportPolicy.orientPixel(0, 0, 4, 3, 2));
+        assertArrayEquals(new int[] {2, 0}, ImageImportPolicy.orientPixel(0, 0, 4, 3, 6));
+        assertArrayEquals(new int[] {0, 3}, ImageImportPolicy.orientPixel(0, 0, 4, 3, 8));
+        assertArrayEquals(new int[] {2, 3}, ImageImportPolicy.orientPixel(0, 0, 4, 3, 7));
+    }
+
+    @Test public void gifSamplingSpansTheSourceAndUsesBoundedWholeCycleTiming() {
+        assertArrayEquals(new int[] {0}, ImageImportPolicy.gifSampleIndices(1, 2));
+        assertArrayEquals(new int[] {0, 7}, ImageImportPolicy.gifSampleIndices(8, 2));
+        assertArrayEquals(new int[] {0, 2, 3}, ImageImportPolicy.gifSampleIndices(4, 3));
+        assertEquals(900, ImageImportPolicy.gifIntervalMs(1800, 2));
+        assertEquals(250, ImageImportPolicy.gifIntervalMs(100, 2));
+        assertEquals(1000, ImageImportPolicy.gifIntervalMs(4000, 2));
+    }
+
+    @Test public void gifSamplingMatchesSharedCrossPlatformVectors() throws Exception {
+        JSONObject vectors;
+        try (InputStream stream = getClass().getResourceAsStream("/gif_processing_vectors.json")) {
+            if (stream == null) throw new AssertionError("GIF processing fixture was not packaged");
+            vectors = new JSONObject(new String(stream.readAllBytes(), StandardCharsets.UTF_8));
+        }
+        org.json.JSONArray cases = vectors.getJSONArray("cases");
+        for (int i = 0; i < cases.length(); i++) {
+            JSONObject item = cases.getJSONObject(i);
+            org.json.JSONArray indices = item.getJSONArray("indices");
+            int[] expected = new int[indices.length()];
+            for (int j = 0; j < indices.length(); j++) expected[j] = indices.getInt(j);
+            assertArrayEquals(expected, ImageImportPolicy.gifSampleIndices(
+                    item.getInt("source_frames"), item.getInt("limit")));
+            assertEquals(item.getInt("interval_ms"), ImageImportPolicy.gifIntervalMs(
+                    item.getLong("duration_ms"), expected.length));
+        }
+    }
+
+    @Test public void trackedWeatherGifMetadataParserCountsFramesAndDelay() throws Exception {
+        java.net.URL resource = getClass().getResource("/cloudy.gif");
+        if (resource == null) throw new AssertionError("Canonical weather GIF test asset was not packaged");
+        GifMetadata metadata = GifMetadata.read(new java.io.File(resource.toURI()));
+        assertEquals(64, metadata.width);
+        assertEquals(16, metadata.height);
+        assertEquals(16, metadata.frameCount);
+        assertEquals(3200, metadata.durationMs);
+    }
+
+    @Test public void liveCapabilitiesAreParsedAndIncompatibleDevicesRejected() {
+        byte[] screen = new byte[] {14, 0x13, 0, 1, 0, 0, 64, 0, 16, (byte) 0xff, 8, 80, 4, 1};
+        byte[] animation = new byte[] {9, 0x1b, 0, 2, 0, 0, 8, 0, (byte) 160};
+        byte[] capacity = new byte[] {9, 0x15, 0, 3, 0, 0, 0, 0x1c, 0x70};
+        SpotLedProtocol.Capabilities parsed = SpotLedProtocol.parseCapabilities(
+                screen, animation, capacity, 1, 2, 3);
+        assertEquals(64, parsed.width);
+        assertEquals(16, parsed.height);
+        assertEquals(0xff, parsed.colorType);
+        assertEquals(8, parsed.maxFrames);
+        assertEquals(7280, parsed.receiveBytes);
+        SpotLedProtocol.validateRgb(parsed, 64, 16, 2, 7000);
+        SpotLedProtocol.validateNativeText(parsed, new byte[][] {{1}, {2}});
+        assertThrows(IllegalArgumentException.class, () -> SpotLedProtocol.validateRgb(parsed, 32, 16, 1, 100));
+        assertThrows(IllegalArgumentException.class, () -> SpotLedProtocol.validateRgb(parsed, 64, 16, 9, 7000));
+        assertThrows(IllegalArgumentException.class, () -> SpotLedProtocol.validateRgb(parsed, 64, 16, 1, 7281));
+        SpotLedProtocol.Capabilities wrongColor = new SpotLedProtocol.Capabilities(64, 16, 0x18, 8, 7280);
+        assertThrows(IllegalArgumentException.class, () -> SpotLedProtocol.validateRgb(wrongColor, 64, 16, 1, 100));
+        SpotLedProtocol.Capabilities smallBuffer = new SpotLedProtocol.Capabilities(64, 16, 0xff, 8, 100);
+        assertThrows(IllegalArgumentException.class, () -> SpotLedProtocol.validateNativeText(smallBuffer, new byte[][] {{0}, new byte[101]}));
+        assertArrayEquals(new byte[] {4, 0x12, 0, 1}, SpotLedProtocol.buildQuery(0x12, 1));
+        assertThrows(IllegalArgumentException.class, () ->
+                SpotLedProtocol.parseCapabilities(screen, animation, capacity, 9, 2, 3));
+        assertThrows(IllegalArgumentException.class, () ->
+                SpotLedProtocol.parseCapabilities(screen, animation, new byte[] {8, 0x15, 0, 3, 0, 0, 0, 1, 0}, 1, 2, 3));
+    }
+
+    private JSONObject sharedFixtures() throws Exception {
+        try (InputStream stream = getClass().getResourceAsStream("/spotled_protocol_vectors.json")) {
+            if (stream == null) throw new AssertionError("Shared protocol fixture was not packaged");
+            return new JSONObject(new String(stream.readAllBytes(), StandardCharsets.UTF_8));
+        }
+    }
+
+    private JSONObject sharedGlyphData() throws Exception {
+        try (InputStream stream = getClass().getResourceAsStream("/spotled_glyphs.json")) {
+            if (stream == null) throw new AssertionError("Canonical glyph data was not packaged");
+            return new JSONObject(new String(stream.readAllBytes(), StandardCharsets.UTF_8));
+        }
+    }
+
+    private static byte[] unhex(String hex) {
+        byte[] bytes = new byte[hex.length() / 2];
+        for (int i = 0; i < bytes.length; i++)
+            bytes[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        return bytes;
+    }
+
+    private static String sha256(byte[] bytes) throws Exception {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+        StringBuilder hex = new StringBuilder(digest.length * 2);
+        for (byte value : digest) hex.append(String.format("%02x", value & 0xff));
+        return hex.toString();
+    }
+
+    private static boolean contains(byte[] data, byte[] sequence) {
+        outer: for (int i = 0; i <= data.length - sequence.length; i++) {
+            for (int j = 0; j < sequence.length; j++)
+                if (data[i + j] != sequence[j]) continue outer;
+            return true;
+        }
+        return false;
+    }
+
+    @Test public void sharedRotationVectorsMatchFixture() throws Exception {
+        JSONObject vector = sharedFixtures().getJSONObject("rotations_rgb");
+        int width = vector.getInt("width");
+        int height = vector.getInt("height");
+        byte[] input = unhex(vector.getString("input_hex"));
+        JSONObject expected = vector.getJSONObject("expected");
+        for (int degrees : new int[] {0, 90, 180, 270}) {
+            JSONObject result = expected.getJSONObject(Integer.toString(degrees));
+            RgbTransforms.Frame actual = RgbTransforms.rotate(input, width, height, degrees);
+            assertEquals(result.getInt("width"), actual.width);
+            assertEquals(result.getInt("height"), actual.height);
+            assertArrayEquals(unhex(result.getString("hex")), actual.rgb);
+        }
+    }
+
+    @Test public void sharedNativeGlyphVectorsMatchFixture() throws Exception {
+        JSONObject source = sharedGlyphData();
+        JSONObject captured = source.getJSONObject("captured_panel16_hex");
+        assertEquals(captured.length(), GeneratedGlyphs.CAPTURED_PANEL16_HEX.size());
+        for (Iterator<String> codes = captured.keys(); codes.hasNext();) {
+            String code = codes.next();
+            int codePoint = Integer.parseInt(code);
+            byte[] expected = unhex(captured.getString(code));
+            assertArrayEquals(expected, GeneratedGlyphs.capturedPanel16(codePoint));
+            assertArrayEquals(expected, SpotLedProtocol.nativeFontObject((char) codePoint));
+        }
+    }
+
+    @Test public void sharedCompactGlyphTableMatchesCanonicalSource() throws Exception {
+        JSONObject compact = sharedGlyphData().getJSONObject("compact_3x5");
+        assertEquals(compact.length(), GeneratedGlyphs.COMPACT_3X5.size());
+        for (Iterator<String> characters = compact.keys(); characters.hasNext();) {
+            String character = characters.next();
+            org.json.JSONArray rows = compact.getJSONArray(character);
+            String[] expected = new String[rows.length()];
+            for (int i = 0; i < rows.length(); i++) expected[i] = rows.getString(i);
+            assertArrayEquals(expected, GeneratedGlyphs.compactRowsFor(character.charAt(0)));
+        }
+    }
+
+    @Test public void sharedBlackFramePacketMatchesFixtureDigest() throws Exception {
+        JSONObject vector = sharedFixtures().getJSONObject("black_frame_64x16_1000ms");
+        byte[] payload = SpotLedProtocol.buildRgbAnimation(
+                new byte[vector.getInt("width") * vector.getInt("height") * 3],
+                vector.getInt("width"), vector.getInt("height"), vector.getInt("interval_ms"),
+                vector.getInt("effect_mode"));
+        assertEquals(vector.getInt("payload_length"), payload.length);
+        assertEquals(vector.getString("payload_sha256"), sha256(payload));
+        byte[] prefix = unhex(vector.getString("payload_prefix_hex"));
+        assertArrayEquals(prefix, java.util.Arrays.copyOf(payload, prefix.length));
+    }
+
+    @Test public void nativeBmpFallbackUsesQuestionGlyphAndPreservesCodePoint() throws Exception {
+        JSONObject vector = sharedFixtures().getJSONObject("native_text_unicode");
+        char character = (char) vector.getInt("bmp_fallback_codepoint");
+        byte[] glyph = SpotLedProtocol.nativeFontObject(character);
+        assertArrayEquals(unhex(vector.getString("glyph_object_hex")), glyph);
+        assertEquals(vector.getInt("bmp_fallback_codepoint"), u16(glyph, 11));
+        assertArrayEquals(java.util.Arrays.copyOfRange(SpotLedProtocol.nativeFontObject('?'), 14, 46),
+                java.util.Arrays.copyOfRange(glyph, 14, 46));
+        byte[] textTransfer = SpotLedProtocol.buildNativeTextTransfers(character + "", 0, 3)[1];
+        assertTrue(contains(textTransfer, unhex(vector.getString("character_text_object_hex"))));
+        assertThrows(IllegalArgumentException.class,
+                () -> SpotLedProtocol.buildNativeTextTransfers(
+                        vector.getString("non_bmp_example"), 0, 3));
+    }
+
     @Test public void textSpeedPresetsCoverFiveIntervals() {
         int[] expected = {300, 250, 200, 150, 100};
         String[] labels = TextSpeedSettings.labels();
@@ -191,8 +378,8 @@ public class SpotLedProtocolTest {
     }
 
     @Test public void tc001AddressExpandsToExpectedTemperatureEndpoint() throws Exception {
-        assertEquals("http://192.168.8.99/api/v1/device",
-                MqttStatusService.normalizeIndoorUrl("192.168.8.99"));
+        assertEquals("http://192.0.2.42/api/v1/device",
+                MqttStatusService.normalizeIndoorUrl("192.0.2.42"));
         assertEquals("http://sensor.local/api/v1/device",
                 MqttStatusService.normalizeIndoorUrl("http://sensor.local/api/v1/device"));
         assertThrows(java.net.MalformedURLException.class,
@@ -300,12 +487,43 @@ public class SpotLedProtocolTest {
         assertEquals(23, CompactTextRaster.render("HYBRID", 0).width);
     }
 
-    @Test public void nativeTextIsDefaultAtZeroDegreesAndRasterCanBeForced() {
+    @Test public void imageRotationDoesNotControlNativeTextAndPortraitKeepsNativeScrolling() {
         assertTrue(TextOutputMode.useNativeText(false, 0));
         assertFalse(TextOutputMode.useNativeText(true, 0));
         assertFalse(TextOutputMode.useNativeText(false, 90));
-        assertFalse(TextOutputMode.useNativeText(false, 180));
-        assertFalse(TextOutputMode.useNativeText(false, 270));
+        assertFalse(TextOutputMode.useNativeText(true, 90));
+        assertTrue(TextOutputMode.useNativeText(false, 270));
+        assertTrue(TextOutputMode.useNativeText(true, 270));
+        CompactTextRaster.PanelFrames frames = CompactTextRaster.renderForPanel("HELLO", 0, 270);
+        assertEquals(64, frames.preview.width);
+        assertEquals(16, frames.preview.height);
+        assertEquals(64, frames.wire.width);
+        assertEquals(16, frames.wire.height);
+        assertArrayEquals(frames.preview.rgb, frames.wire.rgb);
+        assertFalse(java.util.Arrays.equals(CompactTextRaster.renderForPanel("HELLO", 0, 0)
+                .preview.rgb, frames.preview.rgb));
+        byte[] nativeGlyph = SpotLedProtocol.nativeFontObject('A');
+        byte[] landscapeCell = new byte[16 * 16 * 3];
+        for (int y = 0; y < 16; y++) {
+            int bits = ((nativeGlyph[14 + y * 2] & 0xff) << 8)
+                    | (nativeGlyph[15 + y * 2] & 0xff);
+            for (int x = 0; x < 16; x++) if ((bits & (0x8000 >>> x)) != 0) {
+                int offset = (y * 16 + x) * 3;
+                landscapeCell[offset] = landscapeCell[offset + 1] = landscapeCell[offset + 2] = (byte) 255;
+            }
+        }
+        byte[] expectedRotatedCell = RgbTransforms.rotate(landscapeCell, 16, 16, 270).rgb;
+        byte[] actualRotatedCell = new byte[16 * 16 * 3];
+        byte[] panel = CompactTextRaster.renderForPanel("A", 0, 270).preview.rgb;
+        for (int y = 0; y < 16; y++)
+            System.arraycopy(panel, y * 64 * 3, actualRotatedCell, y * 16 * 3, 16 * 3);
+        assertArrayEquals(expectedRotatedCell, actualRotatedCell);
+        byte[][] scrolled = SpotLedProtocol.buildRotatedNativeTextTransfers("HELLO", 0,
+                3, 200, 270);
+        assertEquals(15 + 9 + 5 * 47, scrolled[0].length);
+        byte[] expectedO = SpotLedProtocol.rotatedFontObject('O', 270);
+        assertArrayEquals(expectedO, java.util.Arrays.copyOfRange(scrolled[0],
+                15 + 9 + 4 * 47, 15 + 9 + 5 * 47));
     }
 
     @Test public void compactTextUnsupportedCharactersUseQuestionMarkGlyph() {

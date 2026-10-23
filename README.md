@@ -9,6 +9,11 @@ or animated image transfers; MQTT, clock/weather and background notifications
 remain Android-only by contract. Each iOS contributor signs and deploys their
 own local build.
 
+Native text preserves captured panel glyphs across platforms. Uncaptured BMP
+characters use the shared compact 3×5 fallback scaled to 16×16 while retaining
+their codepoint; non-BMP native text is rejected consistently. Raster text
+substitutes unsupported characters with `?`.
+
 ## Installation
 
 ### Python sender
@@ -20,7 +25,7 @@ git clone https://github.com/plughie/SpotLED-Suite.git
 cd SpotLED-Suite
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
 
 Send text to a nearby display (the sender scans for `SpotLED_*`):
@@ -28,6 +33,10 @@ Send text to a nearby display (the sender scans for `SpotLED_*`):
 ```sh
 python SPOTLED-v3.py "Hello" white left
 ```
+
+Text orientation is selected with `--text-orientation landscape|portrait`;
+Portrait turns native glyphs 270° clockwise and preserves firmware scrolling.
+`--rotation` remains an image-only option and supports 0°, 90°, 180° and 270°.
 
 Send a still image or animated GIF:
 
@@ -38,6 +47,40 @@ python SPOTLED-v3.py --image photo.jpg --rotation 0 --fit contain
 See [SpotLED-MQTT/README.md](SpotLED-MQTT/README.md) for MQTT setup and service
 instructions, and [android/README.md](android/README.md) for Android setup,
 permissions, and build details.
+
+To coordinate Python CLI and SpotLED-MQTT processes on one host, optionally set
+`SPOTLED_LOCK_FILE` to a shared lock-file path before running either program.
+This advisory lock does not coordinate Android/iOS or other hosts; stop the
+Android background display service before manual control. Android Settings
+explains the service-to-manual handoff.
+
+GIF disposal/sampling/timing and intentional Python-versus-mobile resampling
+differences are specified in [docs/image-processing.md](docs/image-processing.md).
+Weather/moon source assets and attribution are in
+[assets/weather-icons](assets/weather-icons/ATTRIBUTION.md); Gradle copies those
+tracked GIFs into the APK automatically.
+
+Run all Python tests with `python -m unittest discover -p 'test_*.py'`. Focused
+protocol/GIF tests do not import BLE drivers:
+`python -m unittest test_spotled_protocol.PureProtocolTests`. Install development
+dependencies with `python -m pip install -r requirements-dev.txt`; tested direct
+dependency versions are recorded in `requirements-tested.txt`.
+
+For offline inspection, use `python SPOTLED-v3.py --image photo.gif --inspect`.
+To rasterize and size-check without connecting or sending, use
+`python SPOTLED-v3.py --image photo.gif --dry-run --preview preview.png`. The
+offline estimate assumes a 64×16 display and 7,280-byte receive capacity; only a
+live send can query the actual display. `--version` reports the installed
+SpotLED Suite Python package version.
+
+### Shared glyph data
+
+The canonical compact 3×5 glyphs and captured native panel-glyph overrides are
+in `glyph_data/spotled_glyphs.json`. After editing that source, regenerate the
+Python, Android, and iOS tables with `python3 tools/generate_glyph_tables.py`;
+run `python3 tools/generate_glyph_tables.py --check` to detect stale generated
+files. The Python, Android JVM, and iOS tests all compare their tables with this
+shared source.
 
 ### SpotLED-MQTT service
 
@@ -63,9 +106,31 @@ weather topic. See the [MQTT guide](SpotLED-MQTT/README.md) for all options.
 ### Android Companion
 
 Download and sideload the latest [SpotLED-Companion APK
-(v0.19.6)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.6/SpotLED-Companion.apk).
+(v0.19.7)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.7/SpotLED-Companion.apk).
 The APK is signed for contributor sideloading, not production distribution via
 an app store.
+
+## Current work state
+
+Android 0.19.7 (versionCode 31) is the latest contributor APK. Python (63 tests),
+MQTT (38 tests), Android (44 JVM tests, lint and release build) pass. Portrait
+text now has only Landscape/Portrait choices; Portrait turns native glyphs 270°
+clockwise and retains native marquee scrolling. The user confirmed the glyph
+direction on iOS. Full-scroll behavior and Android/Python physical confirmation
+remain open, along with live capability-query checks; see [TODO.md](TODO.md).
+
+Android image/GIF decoding runs on a cancellable worker, with limits on encoded
+input/decode size and all EXIF orientations applied. Android and iOS separate
+preview from sending; native previews show the initial viewport. GIF timing,
+resampling, and disposal details are in [docs/image-processing.md](docs/image-processing.md).
+The Android foreground service and Python bridge expose bounded queue/drop
+counts and weather freshness. Android release APKs use a local debug signing
+identity for contributor sideloading, not production distribution. Owner-key
+migration guidance is in [docs/android-signing-migration.md](docs/android-signing-migration.md).
+
+The current iOS development build (0.19.6, build 30) is installed on the paired
+iPhone. This is not an iOS release; contributors still build and sign their own
+app.
 
 ## Attributions
 

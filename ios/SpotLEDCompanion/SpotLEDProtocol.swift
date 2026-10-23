@@ -6,6 +6,7 @@ enum SpotLEDProtocolError: LocalizedError {
     case unsupportedUnicode
     case invalidFrame
     case transferTooLarge
+    case unsupportedDisplay(String)
     case rejected(UInt8)
     case timeout(String)
     case cancelled
@@ -17,10 +18,11 @@ enum SpotLEDProtocolError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .emptyText: return "Enter text first."
-        case .textTooLong: return "Text is longer than the 160-character device limit."
+        case .textTooLong: return "Native text exceeds its effective 154-character encoded-byte limit."
         case .unsupportedUnicode: return "Native text supports BMP characters only; emoji are not supported yet."
         case .invalidFrame: return "RGB data must be exactly 64×16 pixels."
         case .transferTooLarge: return "Transfer exceeds the display's receive limit."
+        case .unsupportedDisplay(let reason): return "Display is not compatible: \(reason) No content was sent."
         case .rejected(let status): return "The display rejected the transfer (status \(status))."
         case .timeout(let phase): return "Timed out waiting for the display's \(phase) acknowledgement."
         case .cancelled: return "Transfer cancelled."
@@ -32,11 +34,112 @@ enum SpotLEDProtocolError: LocalizedError {
     }
 }
 
+struct NativeTextTransferSizes: Equatable {
+    let characterCount: Int
+    let fontPayloadBytes: Int
+    let textPayloadBytes: Int
+    let maximumPayloadBytes: Int
+    let effectiveCharacterLimit: Int
+
+    var fitsWithinLimits: Bool {
+        characterCount <= effectiveCharacterLimit
+            && fontPayloadBytes <= maximumPayloadBytes
+            && textPayloadBytes <= maximumPayloadBytes
+    }
+}
+
+struct SpotLEDDeviceCapabilities: Equatable {
+    let width: Int
+    let height: Int
+    let colorType: UInt8
+    let maximumFrames: Int
+    let receiveBytes: Int
+}
+
 enum SpotLEDProtocol {
     static let width = 64
     static let height = 16
     static let maxReceiveBytes = 7_280
+    static let maxNativeTextCharacters = 160
+    static let nativeFontObjectBytes = 47
+    static let rgbFramePayloadBytes = 15 + 9 + 7 + 5 + width * height * 3 + 10 + 8
+    static let effectiveNativeTextCharacterLimit = min(
+        maxNativeTextCharacters, (maxReceiveBytes - 24) / nativeFontObjectBytes)
     static let setDataObject: UInt16 = 0x8004
+
+    static func buildQuery(id: UInt8, serial: UInt16) -> [UInt8] {
+        [4, id, UInt8(serial >> 8), UInt8(serial & 0xff)]
+    }
+
+    static func parseCapabilities(screen: [UInt8], animation: [UInt8], capacity: [UInt8],
+                                  screenSerial: UInt16, animationSerial: UInt16,
+                                  capacitySerial: UInt16) throws -> SpotLEDDeviceCapabilities {
+        guard validResponse(screen, id: 0x13, serial: screenSerial, minimumLength: 14),
+              validResponse(animation, id: 0x1b, serial: animationSerial, minimumLength: 9),
+              validResponse(capacity, id: 0x15, serial: capacitySerial, minimumLength: 9) else {
+            throw SpotLEDProtocolError.transport("The display returned an invalid capability response.")
+        }
+        guard screen[4] == 0, animation[4] == 0, capacity[4] == 0 else {
+            throw SpotLEDProtocolError.transport("The display rejected a capability query.")
+        }
+        return SpotLEDDeviceCapabilities(
+            width: readU16(screen, 5), height: readU16(screen, 7), colorType: screen[9],
+            maximumFrames: readU16(animation, 5), receiveBytes: Int(readU32(capacity, 5)))
+    }
+
+    static func validateRGB(_ capabilities: SpotLEDDeviceCapabilities, frameCount: Int,
+                            payloadBytes: Int) throws {
+        guard capabilities.width == width, capabilities.height == height else {
+            throw SpotLEDProtocolError.unsupportedDisplay(
+                "This app sends 64×16 frames; the display reports \(capabilities.width)×\(capabilities.height).")
+        }
+        guard capabilities.colorType == 0xFF else {
+            throw SpotLEDProtocolError.unsupportedDisplay(
+                String(format: "RGB requires color format 0xFF; the display reports 0x%02X.", capabilities.colorType))
+        }
+        guard frameCount <= capabilities.maximumFrames else {
+            throw SpotLEDProtocolError.unsupportedDisplay("The animation exceeds the display's frame limit.")
+        }
+        guard capabilities.receiveBytes > 0, payloadBytes <= capabilities.receiveBytes else {
+            throw SpotLEDProtocolError.unsupportedDisplay("The image exceeds the display's receive capacity.")
+        }
+    }
+
+    static func validateNativeText(_ payloads: [[UInt8]], receiveBytes: Int) throws {
+        guard receiveBytes > 0, payloads.allSatisfy({ $0.count <= receiveBytes }) else {
+            throw SpotLEDProtocolError.unsupportedDisplay("The text exceeds the display's receive capacity.")
+        }
+    }
+
+    private static func validResponse(_ bytes: [UInt8], id: UInt8, serial: UInt16,
+                                      minimumLength: Int) -> Bool {
+        bytes.count >= minimumLength && Int(bytes[0]) == bytes.count && bytes[1] == id
+            && readU16(bytes, 2) == Int(serial)
+    }
+
+    private static func readU16(_ bytes: [UInt8], _ offset: Int) -> Int {
+        Int(bytes[offset]) << 8 | Int(bytes[offset + 1])
+    }
+
+    private static func readU32(_ bytes: [UInt8], _ offset: Int) -> UInt32 {
+        UInt32(bytes[offset]) << 24 | UInt32(bytes[offset + 1]) << 16
+            | UInt32(bytes[offset + 2]) << 8 | UInt32(bytes[offset + 3])
+    }
+
+    static func nativeTextTransferSizes(_ text: String) -> NativeTextTransferSizes? {
+        guard text.unicodeScalars.allSatisfy({ $0.value <= 0xFFFF }) else { return nil }
+        let count = text.unicodeScalars.count
+        // SetData wrapper + WordStock header + one 47-byte FontObject per scalar.
+        let fontBytes = 15 + 9 + count * nativeFontObjectBytes
+        // SetData wrapper + CharacterString header + Color/Text objects + time/effect objects.
+        let textBytes = 15 + 10 + count * (10 + 9) + 10 + 8
+        return NativeTextTransferSizes(
+            characterCount: count,
+            fontPayloadBytes: fontBytes,
+            textPayloadBytes: textBytes,
+            maximumPayloadBytes: maxReceiveBytes,
+            effectiveCharacterLimit: effectiveNativeTextCharacterLimit)
+    }
 
     static func checksum(_ bytes: [UInt8]) -> UInt8 {
         let sum = bytes.reduce(0) { $0 + Int($1) }
@@ -86,29 +189,37 @@ enum SpotLEDProtocol {
     }
 
     static func buildNativeTextPayloads(_ text: String, color: SpotLEDTextColor,
-                                        effectMode: UInt8, intervalMs: UInt16 = 200) throws -> [[UInt8]] {
+                                        effectMode: UInt8, intervalMs: UInt16 = 200,
+                                        glyphRotation: Int = 0) throws -> [[UInt8]] {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw SpotLEDProtocolError.emptyText
         }
         guard text.unicodeScalars.allSatisfy({ $0.value <= 0xFFFF }) else {
             throw SpotLEDProtocolError.unsupportedUnicode
         }
-        let chars = text.unicodeScalars.map { scalar -> UInt8 in
-            (32...126).contains(scalar.value) ? UInt8(scalar.value) : UInt8(ascii: "?")
+        let codePoints = text.unicodeScalars.map { UInt16($0.value) }
+        guard codePoints.count <= maxNativeTextCharacters,
+              let sizes = nativeTextTransferSizes(text), sizes.fitsWithinLimits else {
+            throw SpotLEDProtocolError.textTooLong
         }
-        guard chars.count <= 160 else { throw SpotLEDProtocolError.textTooLong }
 
         var glyphs: [UInt8] = []
-        for byte in chars { glyphs.append(contentsOf: nativeFontObject(byte)) }
-        let wordStock = objectWithFollow(id: 5, content: u16Bytes(chars.count), follow: glyphs)
+        guard glyphRotation == 0 || glyphRotation == 90 || glyphRotation == 270 else {
+            throw SpotLEDProtocolError.invalidFrame
+        }
+        for codePoint in codePoints {
+            glyphs.append(contentsOf: rotatedNativeFontObject(codePoint, degrees: glyphRotation))
+        }
+        let wordStock = objectWithFollow(id: 5, content: u16Bytes(codePoints.count), follow: glyphs)
 
-        var content = u16Bytes(chars.count)
+        var content = u16Bytes(codePoints.count)
         content.append(1)
         var follow: [UInt8] = []
-        for (index, byte) in chars.enumerated() {
-            let rgb = color.rgb(at: index, count: chars.count)
+        for (index, codePoint) in codePoints.enumerated() {
+            let rgb = color.rgb(at: index, count: codePoints.count)
             follow.append(contentsOf: object(id: 2, content: rgb))
-            follow.append(contentsOf: object(id: 3, content: [0, byte]))
+            follow.append(contentsOf: object(id: 3,
+                                             content: [UInt8(codePoint >> 8), UInt8(codePoint & 0xff)]))
         }
         follow.append(contentsOf: object(id: 7,
                                          content: [0, UInt8(intervalMs >> 8), UInt8(intervalMs & 0xff)]))
@@ -142,15 +253,21 @@ enum SpotLEDProtocol {
     }
 
     static func nativeFontObject(_ character: UInt8) -> [UInt8] {
-        if let captured = CapturedPanelGlyphs.fontObject(character) {
+        nativeFontObject(UInt16(character))
+    }
+
+    static func nativeFontObject(_ codePoint: UInt16) -> [UInt8] {
+        if codePoint <= UInt16(UInt8.max),
+           let captured = CapturedPanelGlyphs.fontObject(UInt8(codePoint)) {
             return captured
         }
-        let rows = CompactFont.rows(for: character)
+        let rows = CompactFont.rows(forCodePoint: codePoint)
         var content = [UInt8](repeating: 0, count: 40)
         content[0] = 1
         content[2] = 16
         content[4] = 16
-        content[6] = character
+        content[5] = UInt8(codePoint >> 8)
+        content[6] = UInt8(codePoint & 0xff)
         content[7] = 0x20
         for y in 0..<5 {
             for x in 0..<3 where rows[y].utf8[rows[y].utf8.index(rows[y].utf8.startIndex, offsetBy: x)] == 49 {
@@ -166,6 +283,30 @@ enum SpotLEDProtocol {
             }
         }
         return object(id: 13, content: content)
+    }
+
+    static func rotatedNativeFontObject(_ codePoint: UInt16, degrees: Int) -> [UInt8] {
+        let glyph = nativeFontObject(codePoint)
+        guard degrees == 90 || degrees == 270 else { return glyph }
+        var rotated = glyph
+        for row in 0..<16 {
+            rotated[14 + row * 2] = 0
+            rotated[15 + row * 2] = 0
+        }
+        for y in 0..<16 {
+            let bits = UInt16(glyph[14 + y * 2]) << 8 | UInt16(glyph[15 + y * 2])
+            for x in 0..<16 where (bits & (0x8000 >> x)) != 0 {
+                let outX = degrees == 90 ? 15 - y : y
+                let outY = degrees == 90 ? x : 15 - x
+                let offset = 14 + outY * 2
+                var row = UInt16(rotated[offset]) << 8 | UInt16(rotated[offset + 1])
+                row |= 0x8000 >> outX
+                rotated[offset] = UInt8(row >> 8)
+                rotated[offset + 1] = UInt8(row & 0xff)
+            }
+        }
+        rotated[rotated.count - 1] = checksum(Array(rotated.dropLast()))
+        return rotated
     }
 
     private static func commandData(id: UInt16, content: [UInt8], serial: UInt32) -> [UInt8] {

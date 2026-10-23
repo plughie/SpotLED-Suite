@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Python reference sender for the SPOTLED 1.9.4 BLE protocol."""
-import argparse, asyncio, json, sys
+import argparse, asyncio, sys
 from contextlib import asynccontextmanager
 from math import ceil, floor
-from bleak import BleakClient, BleakScanner
+from .ble_lock import ble_process_lock
 from .settings import (
     DEFAULT_DEVICE_NAME, TEXT_EFFECTS, TEXT_SPEEDS_MS, text_effect_mode, text_speed_ms,
 )
 from .font3x5 import FONT3X5
+from .generated_glyphs import CAPTURED_PANEL16_HEX
 
 DEVICE_NAME = DEFAULT_DEVICE_NAME
 NAMED_TEXT_COLORS = {
@@ -19,9 +20,35 @@ NAMED_TEXT_COLORS = {
 CMD = "0000ff21-0000-1000-8000-00805f9b34fb"
 DATA = "0000ff22-0000-1000-8000-00805f9b34fb"
 
+
+class _LazyBleak:
+    def __init__(self, symbol): self.symbol = symbol
+    def _value(self):
+        try:
+            import bleak
+        except ImportError as exc:
+            raise RuntimeError("BLE sending requires Bleak; install the project dependencies.") from exc
+        return getattr(bleak, self.symbol)
+    def __getattr__(self, name): return getattr(self._value(), name)
+    def __call__(self, *args, **kwargs): return self._value()(*args, **kwargs)
+
+
+BleakClient = _LazyBleak("BleakClient")
+BleakScanner = _LazyBleak("BleakScanner")
+
 @asynccontextmanager
 async def connected_device(device_name=DEVICE_NAME, scan_timeout=10,
                            connect_timeout=30, attempts=2):
+    """Connect while holding an optional same-host sender lock."""
+    with ble_process_lock():
+        async with _connected_device_unlocked(device_name, scan_timeout,
+                                              connect_timeout, attempts) as client:
+            yield client
+
+
+@asynccontextmanager
+async def _connected_device_unlocked(device_name=DEVICE_NAME, scan_timeout=10,
+                                     connect_timeout=30, attempts=2):
     """Discover/connect with two bounded attempts and actionable failures."""
     if attempts < 1:
         raise ValueError("attempts must be positive")
@@ -102,14 +129,8 @@ async def find_spotled_device(device_name=DEVICE_NAME, scan_timeout=10):
             return matches[int(choice) - 1][1]
         print("Enter one of the listed numbers.")
 
-# Captured glyphs from alphabet bluetooth HCI capture to wireshark
-CAP_GLYPHS = json.loads('{"97": "0000002f000d0100100010006120000000000000000000003e006600430007007b006300430067007b000000000031", "98": "0000002f000d0100100010006220000000006000600060007e0063006300610041006100630063007e000000000076", "99": "0000002f000d0100100010006320000000000000000000003e0063006000600040006000600063003e00000000001e", "100": "0000002f000d0100100010006420000000000100010001003f00630063004100c1004100630063003f0000000000cf", "101": "0000002f000d0100100010006520000000000000000000003e006300610041807f804000600063003e00000000001b", "102": "0000002f000d010010001000662000000000780060006000f0006000600060006000600060006000600000000000f5", "103": "0000002f000d0100100010006720000000000000000000003f00630063004100c1004100630063003d00010063006d", "104": "0000002f000d0100100010006820000000006000600060007e00660063006300630063006300630063000000000062", "105": "0000002f000d010010001000692000000000600000000000600060006000600060006000600060006000000000005a", "106": "0000002f000d0100100010006a200000000060000000000060006000600060006000600060006000600060004000b9", "107": "0000002f000d0100100010006b200000000060006000600067006e006c00780078006c00660066006300000000002c", "108": "0000002f000d0100100010006c20000000006000600060006000600060006000600060006000600060000000000097", "109": "0000002f000d0100100010006d20000000000000000000007ef06730631863186318631863186318631800000000b4", "110": "0000002f000d0100100010006e20000000000000000000007e0066006300630063006300630063006300000000007c", "111": "0000002f000d0100100010006f20000000000000000000001e0033006100618061806180610033001e00000000000d", "112": "0000002f000d0100100010007020000000000000000000007e0073006300610041004100630063007e0060006000d8", "113": "0000002f000d0100100010007120000000000000000000003f00630063004100c1004100630063001f0001000100e3", "114": "0000002f000d0100100010007220000000000000000000007800600060006000600060006000600060000000000099", "115": "0000002f000d0100100010007320000000000000000000003e006300400060003e000600030042003c00000000000a", "116": "0000002f000d010010001000742000000000200060006000f00060006000600060006000600060007000000000002f", "117": "0000002f000d010010001000752000000000000000000000630063006300630063006300630067003f0000000000b3", "118": "0000002f000d010010001000762000000000000000000000c200c600c60064006c002c00380038001800000000003b", "119": "0000002f000d010010001000772000000000000000000000c660ce604e406e406ac07bc03b803180318000000000fa", "120": "0000002f000d010010001000782000000000000000000000c6006c0028003800180038006c006400c6000000000093", "121": "0000002f000d010010001000792000000000000000000000c600460064006c002c002800380038001000100030001a", "122": "0000002f000d0100100010007a2000000000000000000000fe000c000c001800300030006000c000ff00000000005c", "65": "0000002f000d0100100010004120000000000e000e001b001b001300318031807fc060c040c0c060c06000000000dc", "66": "0000002f000d0100100010004220000000007f00618060c060c061807f8060c060c060c060c060c07f0000000000a2", "67": "0000002f000d0100100010004320000000000f8018c03060600060006000600060006030306018c00f8000000000e2", "68": "0000002f000d0100100010004420000000007f8060c06040606060606060606060606060604060c07f800000000041", "69": "0000002f000d0100100010004520000000007fc060006000600060007fc0600060006000600060007fc00000000021", "70": "0000002f000d0100100010004620000000007fc0600060006000600060007f8060006000600060006000000000003f", "71": "0000002f000d0100100010004720000000000f8038c0306060606000600063e060206020302038e00f80000000006b", "72": "0000002f000d01001000100048200000000060c060c060c060c060c07fc060c060c060c060c060c060c0000000009c", "73": "0000002f000d010010001000492000000000400040004000400040004000400040004000400040004000000000003a", "74": "0000002f000d0100100010004a200000000006000600060006000600060006000600c600460066003c00000000005b", "75": "0000002f000d0100100010004b2000000000606060c06100620064006c00760063006180618060c06060000000004a", "76": "0000002f000d0100100010004c2000000000600060006000600060006000600060006000600060007f800000000018", "77": "0000002f000d0100100010004d2000000000703070707070787068f068b06cb06db0653067306730633000000000ef", "78": "0000002f000d0100100010004e200000000060c070c070c078c06cc06cc066c062c063c061c061c060c00000000058", "79": "0000002f000d0100100010004f20000000000f8038c02060606060206030603060206060306038c00f800000000076", "80": "0000002f000d0100100010005020000000007f8060c060406060604060c07f80600060006000600060000000000015", "81": "0000002f000d0100100010005120000000000f0030c06060606040204020402040206060636031c00fe000200000b0", "82": "0000002f000d0100100010005220000000007f8060c060c060c060c061c07f8063006180618060c060e0000000000d", "83": "0000002f000d0100100010005320000000001f00318060c0600030001e00038000c06040604030c01f000000000000", "84": "0000002f000d010010001000542000000000ff80080008000800080008000800080008000800080008000000000058", "85": "0000002f000d01001000100055200000000060c060c060c060c060c060c060c060c060c060c031801f00000000001e", "86": "0000002f000d010010001000562000000000c060606060c060c03080318031801b001b000e000e000e00000000009b", "87": "0000002f000d010010001000572000000000c386c386638462cc66cc264c244834683c781c38183018300000000041", "88": "0000002f000d01001000100058200000000060e030c031801b000f000e000e001b001980318060c0e060000000003f", "89": "0000002f000d010010001000592000000000c18063006300360036001c001c00080008000800080008000000000057", "90": "0000002f000d0100100010005a20000000007f800300030006000c000c0018003000300060006000ff80000000004f", "49": "0000002f000d01001000100031200000000004000c001c0034000400040004000400040004000400040000000000d2", "50": "0000002f000d0100100010003220000000003e006700630001000300030006000c00380070006000ff000000000029", "51": "0000002f000d0100100010003320000000003c0062006300030006000e00030001000180610063003e0000000000b1", "52": "0000002f000d010010001000342000000000060006000e001e001600360066004600ff80060006000600000000008e", "53": "0000002f000d0100100010003520000000003f002000200060007e006300010001800100610063003e000000000009", "54": "0000002f000d0100100010003620000000001e002300630040005e00e300c100c1804100610063001e000000000003", "55": "0000002f000d0100100010003720000000007f800300060006000c000c000800180018001800100030000000000096", "56": "0000002f000d0100100010003820000000003e0063006300630063001c00630063004100610063003e00000000005c", "57": "0000002f000d0100100010003920000000003c006300630041004180638063803d000100030062003c0000000000a1", "48": "0000002f000d0100100010003020000000001c0022006300630041004100410041006300630022003c000000000027", "32": "0000002f000d010010001000202000000000000000000000000000000000000000000000000000000000000000009d"}')
-FONT5X7 = json.loads('{"32": [0, 0, 0, 0, 0, 0, 0], "33": [4, 4, 4, 4, 0, 0, 4], "34": [10, 10, 0, 0, 0, 0, 0], "35": [10, 10, 31, 10, 31, 10, 10], "36": [4, 15, 20, 14, 5, 30, 4], "37": [24, 25, 8, 4, 18, 19, 8], "38": [12, 18, 20, 8, 21, 18, 13], "39": [4, 4, 0, 0, 0, 0, 0], "40": [2, 4, 8, 8, 8, 4, 2], "41": [8, 4, 2, 2, 2, 4, 8], "42": [0, 4, 21, 14, 21, 4, 0], "43": [0, 4, 4, 31, 4, 4, 0], "44": [0, 0, 0, 0, 0, 4, 8], "45": [0, 0, 0, 31, 0, 0, 0], "46": [0, 0, 0, 0, 0, 0, 4], "47": [0, 1, 2, 4, 8, 16, 0], "48": [14, 17, 19, 21, 25, 17, 14], "49": [4, 12, 4, 4, 4, 4, 14], "50": [14, 17, 1, 6, 8, 16, 31], "51": [14, 17, 1, 6, 1, 17, 14], "52": [2, 6, 10, 18, 31, 2, 2], "53": [31, 16, 30, 1, 1, 17, 14], "54": [6, 8, 16, 30, 17, 17, 14], "55": [31, 1, 2, 4, 8, 8, 8], "56": [14, 17, 17, 14, 17, 17, 14], "57": [14, 17, 17, 15, 1, 2, 12], "58": [0, 0, 4, 0, 0, 4, 0], "59": [0, 0, 4, 0, 0, 4, 8], "60": [2, 4, 8, 16, 8, 4, 2], "61": [0, 0, 31, 0, 31, 0, 0], "62": [8, 4, 2, 1, 2, 4, 8], "63": [14, 17, 1, 2, 4, 0, 4], "64": [14, 17, 23, 21, 23, 16, 14], "65": [14, 17, 17, 31, 17, 17, 17], "66": [30, 17, 17, 30, 17, 17, 30], "67": [14, 17, 16, 16, 16, 17, 14], "68": [30, 17, 17, 17, 17, 17, 30], "69": [31, 16, 16, 30, 16, 16, 31], "70": [31, 16, 16, 30, 16, 16, 16], "71": [14, 17, 16, 23, 17, 17, 15], "72": [17, 17, 17, 31, 17, 17, 17], "73": [14, 4, 4, 4, 4, 4, 14], "74": [7, 2, 2, 2, 2, 18, 12], "75": [17, 18, 20, 24, 20, 18, 17], "76": [16, 16, 16, 16, 16, 16, 31], "77": [17, 27, 21, 21, 17, 17, 17], "78": [17, 17, 25, 21, 19, 17, 17], "79": [14, 17, 17, 17, 17, 17, 14], "80": [30, 17, 17, 30, 16, 16, 16], "81": [14, 17, 17, 17, 21, 18, 13], "82": [30, 17, 17, 30, 20, 18, 17], "83": [14, 17, 16, 14, 1, 17, 14], "84": [31, 4, 4, 4, 4, 4, 4], "85": [17, 17, 17, 17, 17, 17, 14], "86": [17, 17, 17, 17, 10, 10, 4], "87": [17, 17, 21, 21, 21, 27, 17], "88": [17, 17, 10, 4, 10, 17, 17], "89": [17, 17, 10, 4, 4, 4, 4], "90": [31, 1, 2, 4, 8, 16, 31], "91": [14, 8, 8, 8, 8, 8, 14], "92": [16, 8, 4, 2, 1, 0, 0], "93": [14, 2, 2, 2, 2, 2, 14], "94": [4, 10, 17, 0, 0, 0, 0], "95": [0, 0, 0, 0, 0, 0, 31], "96": [8, 4, 2, 0, 0, 0, 0], "97": [0, 0, 14, 1, 15, 17, 15], "98": [16, 16, 30, 17, 17, 17, 30], "99": [0, 0, 14, 16, 16, 16, 14], "100": [1, 1, 15, 17, 17, 17, 15], "101": [0, 0, 14, 17, 31, 16, 14], "102": [6, 8, 8, 30, 8, 8, 8], "103": [0, 0, 15, 17, 15, 1, 14], "104": [16, 16, 30, 17, 17, 17, 17], "105": [4, 0, 12, 4, 4, 4, 14], "106": [2, 0, 6, 2, 2, 18, 12], "107": [16, 16, 18, 20, 24, 20, 18], "108": [12, 4, 4, 4, 4, 4, 14], "109": [0, 0, 27, 21, 21, 17, 17], "110": [0, 0, 30, 17, 17, 17, 17], "111": [0, 0, 14, 17, 17, 17, 14], "112": [0, 0, 30, 17, 30, 16, 16], "113": [0, 0, 15, 17, 15, 1, 1], "114": [0, 0, 22, 24, 16, 16, 16], "115": [0, 0, 15, 16, 14, 1, 30], "116": [8, 8, 30, 8, 8, 9, 6], "117": [0, 0, 17, 17, 17, 17, 15], "118": [0, 0, 17, 17, 17, 10, 4], "119": [0, 0, 17, 21, 21, 21, 10], "120": [0, 0, 17, 10, 4, 10, 17], "121": [0, 0, 17, 17, 15, 1, 14], "122": [0, 0, 31, 2, 4, 8, 31], "123": [2, 4, 4, 8, 4, 4, 2], "124": [4, 4, 4, 4, 4, 4, 4], "125": [8, 4, 4, 2, 4, 4, 8], "126": [0, 0, 8, 21, 2, 0, 0]}')
-FONT5X7 = {int(k): v for k, v in FONT5X7.items()}
-
-# Independent compact raster alphabet for small-pixel rotated text. Each tuple
-# is five rows of three bits; this table is authored here, not copied from
-# AWTRIX NG's noncommercial font asset.
+CAP_GLYPHS = CAPTURED_PANEL16_HEX
+# Uncaptured native BMP glyphs use the shared compact 3x5 '?' fallback.
 def check_sum(data):
     """python-spotled Utils.checkSum: twos complement if >255"""
     s = sum(data)
@@ -169,34 +190,35 @@ def get_multiples_of8(n):
     """Utils.getMultiplesOf8"""
     return n if n % 8 == 0 else ((n // 8) + 1) * 8
 
-def make_font_object(ch):
-    """Build FontObject (type 13) from captured glyphs or 5x7 font"""
+def _validate_native_text(text):
+    if len(text) > 160:
+        raise ValueError("Native text exceeds the 160-character device limit")
+    if any(ord(ch) > 0xFFFF or 0xD800 <= ord(ch) <= 0xDFFF for ch in text):
+        raise ValueError("Native text supports BMP characters only; emoji are not supported")
+
+
+def make_font_object(ch, rotation_degrees=0):
+    """Build a captured FontObject or scale the shared 3x5 fallback to 16x16."""
+    if not isinstance(ch, str) or len(ch) != 1:
+        raise ValueError("A native FontObject must encode exactly one character")
+    _validate_native_text(ch)
     code = ord(ch)
-    # The shared serifed cap-height I replaces the original taller stem glyph.
-    if ch == "I":
-        return bytes.fromhex(
-            "0000002f000d0100100010004920000000001ff001000100010001000100010001000100010001001ff00000000012")
     hex_data = CAP_GLYPHS.get(str(code))
     if hex_data:
-        return bytes.fromhex(hex_data)
-    # Generate 16x16 glyph from 5x7 font, scaled to fill cell
-    rows = FONT5X7.get(code)
-    if rows is None:
-        rows = FONT5X7[63]  # use a visible question mark for unsupported BMP chars
+        glyph = bytes.fromhex(hex_data)
+        return rotate_font_object(glyph, rotation_degrees) if rotation_degrees else glyph
+    fallback_char = ch.upper() if ch.isascii() and len(ch.upper()) == 1 else "?"
+    rows = FONT3X5.get(fallback_char, FONT3X5["?"])
     bitmap = [0] * 16
-    for sr in range(7):
-        sb = rows[sr]
-        dr = sr * 2  # start at row 0, 2 rows per source row
-        if dr + 1 >= 16: continue
-        db = 0
-        for col in range(5):
-            if sb & (0x10 >> col):
-                # 3x horizontal scaling: each source pixel = 3 target pixels
-                db |= (0x8000 >> (col * 3 + 0))
-                db |= (0x8000 >> (col * 3 + 1))
-                db |= (0x8000 >> (col * 3 + 2))
-        bitmap[dr] = db
-        bitmap[dr + 1] = db
+    for y, row in enumerate(rows):
+        for x, bit in enumerate(row):
+            if bit != "1":
+                continue
+            px = 2 + x * 4
+            py = 3 + y * 2
+            for yy in range(py, py + 2):
+                for xx in range(px, px + 4):
+                    bitmap[yy] |= 0x8000 >> xx
     bm = bytearray()
     for row in range(16):
         bm.append((bitmap[row] >> 8) & 0xFF)
@@ -205,13 +227,38 @@ def make_font_object(ch):
     entry = bytearray(b'\x00\x00\x00\x2f\x00\x0d\x01\x00\x10\x00\x10')
     entry += code.to_bytes(2, 'big') + b'\x20' + bm
     entry.append(check_sum(entry))
-    return bytes(entry)
+    glyph = bytes(entry)
+    return rotate_font_object(glyph, rotation_degrees) if rotation_degrees else glyph
 
-def build_word_stock(text):
+def rotate_font_object(glyph, degrees):
+    """Rotate a native 16×16 glyph bitmap clockwise, preserving its font record."""
+    if degrees not in (0, 90, 270):
+        raise ValueError("native glyph rotation must be 0, 90, or 270 degrees")
+    glyph = bytearray(glyph)
+    if len(glyph) != 47:
+        raise ValueError("native FontObject must be 16×16")
+    if degrees == 0:
+        return bytes(glyph)
+    source_rows = [int.from_bytes(glyph[14 + y * 2:16 + y * 2], 'big') for y in range(16)]
+    target_rows = [0] * 16
+    for y, row in enumerate(source_rows):
+        for x in range(16):
+            if not row & (0x8000 >> x):
+                continue
+            out_x, out_y = ((15 - y, x) if degrees == 90 else (y, 15 - x))
+            target_rows[out_y] |= 0x8000 >> out_x
+    for y, row in enumerate(target_rows):
+        glyph[14 + y * 2:16 + y * 2] = row.to_bytes(2, 'big')
+    glyph[-1] = check_sum(glyph[:-1])
+    return bytes(glyph)
+
+def build_word_stock(text, glyph_rotation=0):
     """WordStockObject (type 5) with all FontObjects as followContent"""
+    _validate_native_text(text)
     font_objs = []
     for ch in text:
-        font_objs.append(make_font_object(ch))
+        font_objs.append(make_font_object(ch) if glyph_rotation == 0
+                         else make_font_object(ch, rotation_degrees=glyph_rotation))
 
     # WordStock header
     content = bytearray()
@@ -239,6 +286,7 @@ def build_character_string(text, color=(0xff,0xff,0xff), time_ms=200, speed=3, m
     ``speed`` is retained for compatibility with older callers; the firmware
     timing field is controlled by ``time_ms``.
     """
+    _validate_native_text(text)
     if not 1 <= time_ms <= 0xFFFF:
         raise ValueError("time_ms must be from 1 to 65,535")
     character_colors = normalize_text_colors(text, color)
@@ -531,6 +579,29 @@ def select_frame_indices(frame_count, limit):
         return [0]
     return [int(i * (frame_count - 1) / (limit - 1) + 0.5) for i in range(limit)]
 
+
+def animation_interval_ms(total_duration_ms, sent_frame_count):
+    """Shared GIF cadence: source-cycle duration divided by sent frames, clamped safely."""
+    if sent_frame_count < 1:
+        raise ValueError("sent_frame_count must be positive")
+    return max(250, min(1000, int(max(0, total_duration_ms) / sent_frame_count + 0.5)))
+
+
+def image_animation_metadata(path):
+    """Return source frame count and normalized full-cycle delay for GIF reporting."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("Image input requires Pillow; install the project dependencies.") from exc
+    with Image.open(path) as source:
+        count = getattr(source, "n_frames", 1)
+        total_ms = 0
+        for index in range(count):
+            source.seek(index)
+            delay = int(source.info.get("duration", 100) or 100)
+            total_ms += max(20, delay)
+        return count, total_ms
+
 def load_image_frames(path, rotation=0, fit="contain", target_width=64,
                       target_height=16, background=(0, 0, 0), max_frames=20):
     """Load and transform up to max_frames, returning RGB frames and GIF delays."""
@@ -562,7 +633,8 @@ def load_image_frames(path, rotation=0, fit="contain", target_width=64,
             output.append((pixels, max(1, delay_ms)))
     return output
 
-def build_animation_transfer(frames, max_frames, receive_capacity, width=64, height=16):
+def build_animation_transfer(frames, max_frames, receive_capacity, width=64, height=16,
+                             total_duration_ms=None):
     """Preserve as many evenly sampled animation frames as the device accepts.
 
     The protocol supplies one shared TimeObject for a FrameAnimationObject,
@@ -578,8 +650,9 @@ def build_animation_transfer(frames, max_frames, receive_capacity, width=64, hei
         indices = select_frame_indices(len(frames), frame_count)
         selected = [frames[i] for i in indices]
         delays = [delay for _, delay in selected]
-        # Clamp the shared device interval to keep GIFs from becoming rapid flashes.
-        interval = max(250, min(1000, round(sum(delays) / len(delays))))
+        # Keep the source animation's cycle duration approximately constant.
+        duration = total_duration_ms if total_duration_ms is not None else sum(delays)
+        interval = animation_interval_ms(duration, frame_count)
         frame_objects = [build_rgb_frame(width, height, pixels) for pixels, _ in selected]
         animation = build_frame_animation(frame_objects, frame_time_ms=interval, mode=0)
         payload = wrap_set_data(animation)
@@ -1006,6 +1079,7 @@ async def send_image(path, rotation=0, fit='contain', preview_path=None,
     async with connected_device(device_name) as client:
         screen, capabilities, receive_capacity = await query_image_capabilities(client)
         width, height = screen["width"], screen["height"]
+        original_frame_count, source_duration_ms = image_animation_metadata(path)
         frames = load_image_frames(
             path, rotation=rotation, fit=fit, target_width=width, target_height=height,
             max_frames=capabilities["max_frames"]
@@ -1014,7 +1088,8 @@ async def send_image(path, rotation=0, fit='contain', preview_path=None,
             save_rgb_preview(preview_path, width, height, frames[0][0])
             print(f"Preview saved: {preview_path}")
         payload, frames_sent, frame_interval = build_animation_transfer(
-            frames, capabilities["max_frames"], receive_capacity, width, height
+            frames, capabilities["max_frames"], receive_capacity, width, height,
+            total_duration_ms=source_duration_ms
         )
         if "storage_bytes" in capabilities and len(payload) > capabilities["storage_bytes"]:
             raise RuntimeError(
@@ -1024,7 +1099,8 @@ async def send_image(path, rotation=0, fit='contain', preview_path=None,
         await send_set_acknowledged(client, 0x8004, payload)
     print(
         f"Image transfer acknowledged ({width}x{height}, color=0x{screen['color_type']:02X}, "
-        f"rotation={rotation}, fit={fit}, frames={frames_sent}, interval={frame_interval}ms)."
+        f"rotation={rotation}, fit={fit}, frames={frames_sent}/{original_frame_count}, "
+        f"interval={frame_interval}ms)."
     )
 
 async def send_rgb_frame(pixels, width=64, height=16, device_name=DEVICE_NAME,
@@ -1126,18 +1202,47 @@ async def send_rotated_text(text, color, rotation, fit='contain', preview_path=N
         await send_set_acknowledged(client, 0x8004, payload)
     print(f"Raster text transfer acknowledged ({rotation}°, fit={fit}, interval={frame_time_ms}ms).")
 
+def render_native_text_preview(text, color=(255, 255, 255), glyph_rotation=0):
+    """Render the native font's initial 64×16 viewport, optionally turning glyphs."""
+    _validate_native_text(text)
+    if glyph_rotation not in (0, 90, 270):
+        raise ValueError("glyph_rotation must be 0, 90, or 270 degrees")
+    character_colors = normalize_text_colors(text, color)
+    output = bytearray(64 * 16 * 3)
+    for index, char in enumerate(text[:4]):
+        glyph = make_font_object(char, rotation_degrees=glyph_rotation)
+        for y in range(16):
+            bits = int.from_bytes(glyph[14 + y * 2:16 + y * 2], 'big')
+            for x in range(16):
+                if bits & (0x8000 >> x):
+                    offset = (y * 64 + index * 16 + x) * 3
+                    output[offset:offset + 3] = bytes(character_colors[index])
+    return 64, 16, bytes(output)
+
 async def main(text, color=(0xff,0xff,0xff), mode=0, device_name=DEVICE_NAME,
-               text_mode="native", time_ms=200):
+               text_mode="native", time_ms=200, text_orientation="landscape"):
     """Send text using native CharacterString or an Android-style 3x5 raster frame."""
     if text_mode not in {"native", "raster"}:
         raise ValueError("text_mode must be native or raster")
+    if text_orientation not in {"landscape", "portrait"}:
+        raise ValueError("text_orientation must be landscape or portrait")
     if not 1 <= time_ms <= 0xFFFF:
         raise ValueError("time_ms must be from 1 to 65,535")
-    if text_mode == "raster":
+    if text_mode == "raster" and text_orientation == "landscape":
         return await send_rotated_text(
             text, color, 0, "contain", raster_font="3x5", text_layout="whole",
             device_name=device_name, mode=mode, frame_time_ms=time_ms
         )
+    # Validate and encode both native transfers before connecting or issuing any
+    # display setup commands; a bad CharacterString must not leave a new font
+    # installed or the display partially reconfigured.
+    text_units = len(text.encode('utf-16-be')) // 2
+    word_data = (build_word_stock(text, glyph_rotation=270)
+                 if text_orientation == "portrait" else build_word_stock(text))
+    word_stock = wrap_set_data(word_data)
+    char_string = wrap_set_data(
+        build_character_string(text, color, time_ms=time_ms, mode=mode)
+    )
     async with connected_device(device_name) as client:
         print("Connected!")
 
@@ -1151,14 +1256,15 @@ async def main(text, color=(0xff,0xff,0xff), mode=0, device_name=DEVICE_NAME,
         receive_capacity = parse_receive_capacity_response(
             await query_simple_response(client, 0x14, 0x15)
         )
-        if any(ord(ch) > 0xFFFF or 0xD800 <= ord(ch) <= 0xDFFF for ch in text):
-            raise ValueError("Text currently supports BMP characters only (no emoji outside BMP)")
-        text_units = len(text.encode('utf-16-be')) // 2
         if text_units > capabilities["max_text_characters"]:
             raise ValueError(
                 f"Text has {text_units} UTF-16 units; device limit is "
                 f"{capabilities['max_text_characters']}"
             )
+        if len(word_stock) > receive_capacity:
+            raise ValueError(f"Font transfer exceeds device receive limit ({receive_capacity} bytes)")
+        if len(char_string) > receive_capacity:
+            raise ValueError(f"Text transfer exceeds device receive limit ({receive_capacity} bytes)")
         print(
             f"Text: {text!r} ({text_units}/{capabilities['max_text_characters']} chars); "
             f"screen {screen['width']}x{screen['height']}; native timing={time_ms}ms"
@@ -1175,19 +1281,11 @@ async def main(text, color=(0xff,0xff,0xff), mode=0, device_name=DEVICE_NAME,
 
         # Send WordStock (FontData)
         print("Sending font...")
-        word_stock = wrap_set_data(build_word_stock(text))
-        if len(word_stock) > receive_capacity:
-            raise ValueError(f"Font transfer exceeds device receive limit ({receive_capacity} bytes)")
         await send_set_acknowledged(client, 0x8004, word_stock)
         await asyncio.sleep(0.1)
 
         # Send CharacterString (TextData)
         print("Sending text...")
-        char_string = wrap_set_data(
-            build_character_string(text, color, time_ms=time_ms, mode=mode)
-        )
-        if len(char_string) > receive_capacity:
-            raise ValueError(f"Text transfer exceeds device receive limit ({receive_capacity} bytes)")
         await send_set_acknowledged(client, 0x8004, char_string)
         await asyncio.sleep(0.5)
 
@@ -1209,28 +1307,108 @@ def parse_cli_args():
     parser.add_argument("--device-name", default=DEVICE_NAME,
                         help=f"BLE advertised device name (default: {DEVICE_NAME})")
     parser.add_argument("--rotation", type=int, choices=(0, 90, 180, 270), default=0,
-                        help="clockwise pixel rotation before fitting to 64x16")
+                        help="image-only clockwise rotation before fitting to 64x16")
+    parser.add_argument("--text-orientation", choices=("landscape", "portrait"),
+                        default="landscape",
+                        help="text orientation; portrait rotates native 16x16 glyphs and preserves scrolling")
     parser.add_argument("--fit", choices=("contain", "cover", "stretch"), default="contain",
                         help="contain preserves all content with padding; cover crops; stretch distorts")
     parser.add_argument("--preview", help="optional path for a PNG of the exact 64x16 frame to send")
     parser.add_argument("--raster-font", choices=("3x5", "panel16"), default=None,
                         help="explicitly use geometric text: compact 3x5 or captured 16x16 glyphs")
-    parser.add_argument("--text-layout", choices=("whole", "glyphs"), default="whole",
-                        help="rotate the whole text line or rotate glyphs while keeping horizontal flow")
     parser.add_argument("--query-visible-map", action="store_true",
                         help="read and print the device pixel-shape mask without changing the display")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="prepare text/image offline, report estimated packet sizes, and send nothing")
+    parser.add_argument("--inspect", action="store_true",
+                        help="inspect image metadata offline without decoding or connecting to BLE")
+    parser.add_argument("--version", action="version", version=f"SpotLED Suite {__import__('spotled_common').__version__}")
     args = parser.parse_args()
 
     if args.query_visible_map:
-        if args.image or args.text is not None:
+        if args.image or args.text is not None or args.dry_run or args.inspect:
             parser.error("--query-visible-map cannot be combined with text or --image")
+    elif args.inspect:
+        if not args.image or args.text is not None or args.dry_run:
+            parser.error("--inspect requires --image and cannot be combined with --dry-run")
     elif args.image:
         if args.text is not None:
             parser.error("provide text or --image, not both")
     else:
         if args.text is None:
             parser.error("provide text or --image")
+        if args.rotation != 0:
+            parser.error("--rotation is image-only; use --text-orientation landscape or portrait for text")
     return args
+
+
+def inspect_image_file(path):
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("Image inspection requires Pillow; install the project dependencies.") from exc
+    with Image.open(path) as image:
+        return {
+            "format": image.format or "unknown", "width": image.width, "height": image.height,
+            "frames": getattr(image, "n_frames", 1),
+            "orientation": image.getexif().get(274, 1),
+            "bytes": __import__("os").path.getsize(path),
+        }
+
+
+def dry_run(args):
+    assumed_limit = 7280
+    if args.image:
+        info = inspect_image_file(args.image)
+        original_frame_count, source_duration_ms = image_animation_metadata(args.image)
+        frames = load_image_frames(args.image, args.rotation, args.fit,
+                                   max_frames=min(2, info["frames"]))
+        payload, sent_count, interval = build_animation_transfer(
+            frames, max_frames=2, receive_capacity=assumed_limit,
+            total_duration_ms=source_duration_ms)
+        if args.preview:
+            save_rgb_preview(args.preview, 64, 16, frames[0][0])
+        sampled_text = f"frames {original_frame_count} → {sent_count}"
+        print(f"Offline dry run: {args.image} ({info['width']}×{info['height']}, {info['format']}); "
+              f"{sampled_text}; rotation={args.rotation}°, fit={args.fit}; "
+              f"interval={interval} ms; packet={len(payload)}/{assumed_limit} bytes; no BLE connection.")
+        if args.preview: print(f"Preview saved: {args.preview}")
+        return
+
+    text = args.text
+    if (args.text_orientation == "portrait" or
+            (args.text_mode == "native" and args.raster_font is None and args.fit == "contain")):
+        glyph_rotation = 270 if args.text_orientation == "portrait" else 0
+        word_data = (build_word_stock(text, glyph_rotation=270)
+                     if glyph_rotation else build_word_stock(text))
+        word = wrap_set_data(word_data)
+        string = wrap_set_data(build_character_string(
+            text, color=args.color, time_ms=text_speed_ms(args.text_speed),
+            mode=text_effect_mode(args.mode)))
+        orientation = "portrait" if glyph_rotation else "landscape"
+        print(f"Offline dry run: native {orientation} text ({len(text)} characters); "
+              f"WordStock={len(word)} B, CharacterString={len(string)} B each ≤ {assumed_limit}; "
+              "screen assumed 64×16; live capabilities were not queried; no BLE connection.")
+        if args.preview:
+            width, height, pixels = render_native_text_preview(
+                text, color=args.color, glyph_rotation=glyph_rotation
+            )
+            save_rgb_preview(args.preview, width, height, pixels)
+            print(f"Preview saved: {args.preview}")
+        return
+
+    width, height, pixels = render_text_rgb(text, color=args.color,
+                                            raster_font=args.raster_font or "3x5")
+    width, height, pixels = fit_rgb_pixels(width, height, pixels, 64, 16, fit=args.fit)
+    frame = build_rgb_frame(64, 16, pixels)
+    payload = wrap_set_data(build_frame_animation([frame],
+                             frame_time_ms=text_speed_ms(args.text_speed),
+                             mode=text_effect_mode(args.mode)))
+    if args.preview: save_rgb_preview(args.preview, 64, 16, pixels)
+    print(f"Offline dry run: raster text ({len(text)} characters); rotation={args.rotation}°, "
+          f"fit={args.fit}; packet={len(payload)}/{assumed_limit} bytes; "
+          "screen assumed 64×16; live capabilities were not queried; no BLE connection.")
+    if args.preview: print(f"Preview saved: {args.preview}")
 
 async def print_visible_pixel_map(device_name=DEVICE_NAME):
     async with connected_device(device_name) as client:
@@ -1247,7 +1425,14 @@ async def print_visible_pixel_map(device_name=DEVICE_NAME):
 def cli():
     args = parse_cli_args()
     try:
-        if args.query_visible_map:
+        if args.inspect:
+            info = inspect_image_file(args.image)
+            print(f"Image: {info['format']} {info['width']}×{info['height']}; "
+                  f"frames={info['frames']}; EXIF orientation={info['orientation']}; "
+                  f"file={info['bytes']} bytes; no BLE connection.")
+        elif args.dry_run:
+            dry_run(args)
+        elif args.query_visible_map:
             asyncio.run(print_visible_pixel_map(args.device_name))
         elif args.image:
             asyncio.run(send_image(
@@ -1258,11 +1443,22 @@ def cli():
             color = args.color.lower()
             mode = text_effect_mode(args.mode)
             time_ms = text_speed_ms(args.text_speed)
-            if (args.text_mode == "raster" or args.rotation != 0 or args.fit != "contain" or args.preview or
-                    args.raster_font is not None or args.text_layout != "whole"):
+            if args.text_orientation == "portrait":
+                if args.preview:
+                    width, height, pixels = render_native_text_preview(
+                        text, color=color, glyph_rotation=270
+                    )
+                    save_rgb_preview(args.preview, width, height, pixels)
+                    print(f"Preview saved: {args.preview}")
+                asyncio.run(main(
+                    text, color, mode, args.device_name, text_mode=args.text_mode,
+                    time_ms=time_ms, text_orientation="portrait"
+                ))
+            elif (args.text_mode == "raster" or args.fit != "contain" or args.preview or
+                    args.raster_font is not None):
                 asyncio.run(send_rotated_text(
-                    text, color, args.rotation, args.fit, args.preview,
-                    args.raster_font or "3x5", args.text_layout, args.device_name, mode,
+                    text, color, 0, args.fit, args.preview,
+                    args.raster_font or "3x5", "whole", args.device_name, mode,
                     frame_time_ms=time_ms
                 ))
             else:

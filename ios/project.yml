@@ -18,6 +18,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.bugmag.spotledcompanion
+        MARKETING_VERSION: "0.19.6"
+        CURRENT_PROJECT_VERSION: "30"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: SPOTLED Companion
@@ -26,10 +28,27 @@ targets:
   SpotLEDCompanionTests:
     type: bundle.unit-test
     platform: iOS
-    sources: [SpotLEDCompanionTests]
+    sources:
+      - SpotLEDCompanionTests
+      - path: ../test_fixtures/spotled_protocol_vectors.json
+        buildPhase: resources
+      - path: ../glyph_data/spotled_glyphs.json
+        buildPhase: resources
+      - path: ../test_fixtures/gif_processing_vectors.json
+        buildPhase: resources
     dependencies:
       - target: SpotLEDCompanion
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: net.bugmag.spotledcompanion.tests
+        GENERATE_INFOPLIST_FILE: YES
+  SpotLEDCompanionUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [SpotLEDCompanionUITests]
+    dependencies:
+      - target: SpotLEDCompanion
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.bugmag.spotledcompanion.uitests
         GENERATE_INFOPLIST_FILE: YES

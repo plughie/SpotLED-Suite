@@ -39,7 +39,7 @@ private enum CompanionSheet: String, Identifiable {
 }
 
 private enum PendingTransfer {
-    case text(String, SpotLEDTextColor, SpotLEDEffect, Int, ImageFit, Bool, UInt16)
+    case text(String, SpotLEDTextColor, SpotLEDEffect, TextPanelOrientation, Bool, UInt16)
     case image([[UInt8]], UInt16)
 }
 
@@ -52,18 +52,22 @@ struct ContentView: View {
     @AppStorage("spotled.textEffect") private var effectName = SpotLEDEffect.scrollLeft.rawValue
     @AppStorage("spotled.rotation") private var rotation = 0
     @AppStorage("spotled.fit") private var fitName = ImageFit.contain.rawValue
+    @AppStorage("spotled.textOrientation") private var textOrientationName = TextPanelOrientation.landscape.rawValue
     @AppStorage("spotled.textSpeedMs") private var textSpeedMs = 200
     @AppStorage("spotled.appearance") private var appearanceName = "system"
     @State private var photoItem: PhotosPickerItem?
     @State private var selectedPhotoData: Data?
     @State private var photoProcessingID = UUID()
+    @State private var photoTasks = PhotoTaskRegistry()
     @State private var imageFrames: [[UInt8]] = []
     @State private var imagePreviews: [UIImage] = []
     @State private var imageIntervalMs: UInt16 = 500
+    @State private var imageSourceFrameCount = 0
     @State private var imageLoadError: String?
     @State private var activeSheet: CompanionSheet?
     @State private var pendingTransfer: PendingTransfer?
     @State private var askToFindDisplay = false
+    @FocusState private var messageFieldFocused: Bool
 
     private var color: SpotLEDTextColor { SpotLEDTextColor(rawValue: colorName) ?? .white }
     private var textRendering: SpotLEDTextRendering {
@@ -71,6 +75,32 @@ struct ContentView: View {
     }
     private var effect: SpotLEDEffect { SpotLEDEffect(rawValue: effectName) ?? .scrollLeft }
     private var fit: ImageFit { ImageFit(rawValue: fitName) ?? .contain }
+    private var textOrientation: TextPanelOrientation {
+        if let saved = TextPanelOrientation(rawValue: textOrientationName) { return saved }
+        // Migrate the previous 90°/270° choices to the single Portrait mode.
+        return textOrientationName.hasPrefix("90°") || textOrientationName.hasPrefix("270°")
+            ? .portrait : .landscape
+    }
+    private var usesNativeTextTransfer: Bool {
+        textOrientation != .landscape || textRendering == .normal
+    }
+    private var nativeTextTransferSize: NativeTextTransferSizes? {
+        SpotLEDProtocol.nativeTextTransferSizes(text)
+    }
+    private var nativeTextTransferUnavailable: Bool {
+        guard usesNativeTextTransfer else { return false }
+        guard let nativeTextTransferSize else { return true }
+        return !nativeTextTransferSize.fitsWithinLimits
+    }
+    private var textTransferLimitSummary: String {
+        if usesNativeTextTransfer {
+            guard let sizes = nativeTextTransferSize else {
+                return "Native text supports BMP codepoints only; switch to Raster for non-BMP characters."
+            }
+            return "Native: \(sizes.characterCount) characters; WordStock \(sizes.fontPayloadBytes) B + CharacterString \(sizes.textPayloadBytes) B (max \(sizes.maximumPayloadBytes) B each). Effective limit: \(sizes.effectiveCharacterLimit) characters."
+        }
+        return "Raster: \(SpotLEDProtocol.rgbFramePayloadBytes) B per 64×16 frame (max \(SpotLEDProtocol.maxReceiveBytes) B)."
+    }
     private var preferredColorScheme: ColorScheme? {
         switch appearanceName {
         case "light": return .light
@@ -87,6 +117,9 @@ struct ContentView: View {
                         ble.scan()
                     }
                     .disabled(ble.isScanning)
+                    Text("Bluetooth permission is needed for discovery. If denied, enable SpotLED Companion under Settings → Privacy & Security → Bluetooth.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("display.bluetoothGuidance")
 
                     if ble.devices.isEmpty {
                         Text("Displays named SpotLED_* appear here.")
@@ -125,6 +158,13 @@ struct ContentView: View {
                     TextField("Enter a message", text: $text)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .focused($messageFieldFocused)
+                        .accessibilityIdentifier("text.message")
+                    Text(textTransferLimitSummary)
+                        .font(.footnote)
+                        .foregroundStyle(nativeTextTransferUnavailable
+                                         ? Color.red : Color(uiColor: .secondaryLabel))
+                        .accessibilityIdentifier("text.transferLimit")
                     Picker("Color", selection: $colorName) {
                         ForEach(SpotLEDTextColor.allCases) { option in
                             Text(option.rawValue).tag(option.rawValue)
@@ -135,8 +175,23 @@ struct ContentView: View {
                             Text(mode.rawValue).tag(mode.rawValue)
                         }
                     }
-                    if textRendering == .normal && rotation != 0 {
-                        Text("Rotated text is sent as raster pixels.")
+                    .accessibilityIdentifier("text.rendering")
+                    Picker("Text orientation", selection: $textOrientationName) {
+                        ForEach(TextPanelOrientation.allCases) { orientation in
+                            Text(orientation.rawValue).tag(orientation.rawValue)
+                        }
+                    }
+                    .onAppear {
+                        if TextPanelOrientation(rawValue: textOrientationName) == nil {
+                            textOrientationName = textOrientation.rawValue
+                        }
+                    }
+                    .accessibilityIdentifier("text.orientation")
+                    if textOrientation == .landscape && textRendering == .normal {
+                        Text("Native text preview shows the initial 64×16 viewport; firmware marquee playback may look different.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else if textOrientation != .landscape {
+                        Text("Rotated native glyphs preserve the full message and support Scroll Left.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     Picker("Effect", selection: $effectName) {
@@ -145,25 +200,30 @@ struct ContentView: View {
                         }
                     }
                     if let textPreview { previewSection(textPreview) }
-                    Button("Preview and send text") {
+                    Button("Send text") {
                         requestTextSend()
                     }
+                    .accessibilityIdentifier("text.send")
                     .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                              || ble.isSending)
+                              || ble.isSending || nativeTextTransferUnavailable)
                 }
 
                 Section("Image") {
-                    PhotosPicker(selection: $photoItem, matching: .images) {
-                        Label(imageFrames.isEmpty ? "Choose image or GIF" : "Choose another image or GIF",
-                              systemImage: "photo")
-                    }
                     Picker("Rotation", selection: $rotation) {
                         ForEach([0, 90, 180, 270], id: \.self) { angle in
                             Text("\(angle)°").tag(angle)
                         }
                     }
+                    .accessibilityIdentifier("image.rotation")
                     Picker("Fit", selection: $fitName) {
                         ForEach(ImageFit.allCases) { mode in Text(mode.rawValue).tag(mode.rawValue) }
+                    }
+                    .accessibilityIdentifier("image.fit")
+                    Text("Rotation and fit apply to images only.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Label(imageFrames.isEmpty ? "Choose image or GIF" : "Choose another image or GIF",
+                              systemImage: "photo")
                     }
                     if imagePreviews.count > 1 {
                         TimelineView(.periodic(from: .now, by: max(0.25, Double(imageIntervalMs) / 1000))) { timeline in
@@ -179,17 +239,19 @@ struct ContentView: View {
                         Text(imageLoadError).font(.footnote).foregroundStyle(.red)
                     }
                     if imageFrames.count > 1 {
-                        Text("GIF preview and transfer use two sampled frames at a safe interval (\(imageIntervalMs) ms/frame).")
+                        Text("Showing/sending \(imageFrames.count) of \(imageSourceFrameCount) source GIF frames at \(imageIntervalMs) ms/frame; samples span the animation and composite over black.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
-                    Button("Preview and send image") {
+                    Button("Send image or GIF") {
                         guard !imageFrames.isEmpty else { return }
                         requestTransfer(.image(imageFrames, imageIntervalMs))
                     }
+                    .accessibilityIdentifier("image.send")
                     .disabled(imageFrames.isEmpty || ble.isSending)
                 }
             }
             .navigationTitle("SPOTLED Companion")
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -199,6 +261,10 @@ struct ContentView: View {
                         Image(systemName: "gearshape")
                             .accessibilityLabel("Settings and About")
                     }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { messageFieldFocused = false }
                 }
             }
             .preferredColorScheme(preferredColorScheme)
@@ -232,16 +298,20 @@ struct ContentView: View {
             .onChange(of: fitName) { _, _ in reprocessSelectedPhoto() }
             .onChange(of: photoItem) { _, item in loadPhoto(item) }
             .onAppear { reprocessSelectedPhoto() }
+            .onDisappear { cancelPhotoWork() }
         }
     }
 
     private var textPreview: UIImage? {
         let frame: RGBFrame
-        if textRendering == .normal && rotation == 0 {
+        if textOrientation != .landscape {
+            frame = RGBRasterizer.nativeTextFrame(text, color: color,
+                                                  glyphRotation: textOrientation.textRotation)
+        } else if usesNativeTextTransfer {
             frame = RGBRasterizer.nativeTextFrame(text, color: color)
         } else {
-            frame = RGBRasterizer.textFrame(text, color: color,
-                                            rotation: rotation, fit: fit)
+            frame = RGBRasterizer.textFrames(text, color: color,
+                                             orientation: textOrientation).preview
         }
         return RGBRasterizer.previewImage(frame)
     }
@@ -252,7 +322,7 @@ struct ContentView: View {
             Image(uiImage: preview)
                 .resizable()
                 .interpolation(.none)
-                .aspectRatio(4, contentMode: .fit)
+                .aspectRatio(preview.size.width / preview.size.height, contentMode: .fit)
                 .background(.black)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         }
@@ -260,29 +330,37 @@ struct ContentView: View {
     }
 
     private func refreshImagePreview() {
+        photoTasks.cancel(.decoding)
         guard let data = selectedPhotoData else { return }
         let generation = UUID()
         photoProcessingID = generation
         imageFrames = []
         imagePreviews = []
+        imageSourceFrameCount = 0
         let selectedRotation = rotation
         let selectedFit = fit
+        let decodingTask = Task.detached(priority: .userInitiated) {
+            try RGBRasterizer.imageFrames(data, rotation: selectedRotation, fit: selectedFit)
+        }
+        photoTasks.replace(.decoding) { decodingTask.cancel() }
         Task {
             do {
-                let result = try await Task.detached(priority: .userInitiated) {
-                    try RGBRasterizer.imageFrames(data, rotation: selectedRotation, fit: selectedFit)
-                }.value
-                guard photoProcessingID == generation else { return }
+                let result = try await decodingTask.value
+                guard !decodingTask.isCancelled, photoProcessingID == generation else { return }
                 imageFrames = result.frames.map(\.bytes)
                 imageIntervalMs = result.intervalMs
+                imageSourceFrameCount = result.originalFrameCount
                 imagePreviews = result.frames.compactMap(RGBRasterizer.previewImage)
                 imageLoadError = imagePreviews.isEmpty
                     ? "Could not prepare the image preview. Choose a different file."
                     : nil
+            } catch is CancellationError {
+                return
             } catch {
                 guard photoProcessingID == generation else { return }
                 imageFrames = []
                 imagePreviews = []
+                imageSourceFrameCount = 0
                 imageLoadError = "Could not decode selected image: \(error.localizedDescription)"
             }
         }
@@ -293,8 +371,13 @@ struct ContentView: View {
         refreshImagePreview()
     }
 
+    private func cancelPhotoWork() {
+        photoProcessingID = UUID()
+        photoTasks.cancelAll()
+    }
+
     private func requestTextSend() {
-        requestTransfer(.text(text, color, effect, rotation, fit,
+        requestTransfer(.text(text, color, effect, textOrientation,
                               textRendering == .raster, UInt16(textSpeedMs)))
     }
 
@@ -316,12 +399,13 @@ struct ContentView: View {
 
     private func perform(_ request: PendingTransfer) {
         switch request {
-        case let .text(message, selectedColor, selectedEffect, selectedRotation,
-                       selectedFit, rasterRequested, intervalMs):
+        case let .text(message, selectedColor, selectedEffect, selectedOrientation,
+                       rasterRequested, intervalMs):
             Task {
                 await ble.sendText(message, color: selectedColor,
-                                   effectMode: selectedEffect.id, rotation: selectedRotation,
-                                   fit: selectedFit, rasterRequested: rasterRequested,
+                                   effectMode: selectedEffect.id,
+                                   rotation: selectedOrientation.textRotation,
+                                   fit: .contain, rasterRequested: rasterRequested,
                                    intervalMs: intervalMs)
             }
         case let .image(frames, intervalMs):
@@ -330,28 +414,36 @@ struct ContentView: View {
     }
 
     private func loadPhoto(_ item: PhotosPickerItem?) {
-        guard let item else { return }
+        guard let item else {
+            photoTasks.cancel(.loading)
+            return
+        }
+        photoTasks.cancelAll()
         imageLoadError = nil
         selectedPhotoData = nil
         imageFrames = []
         imagePreviews = []
         let generation = UUID()
         photoProcessingID = generation
-        Task {
+        let loadingTask = Task {
             do {
                 guard let data = try await item.loadTransferable(type: Data.self) else {
                     guard photoProcessingID == generation else { return }
                     imageLoadError = "Could not read that image. Choose a different file."
                     return
                 }
+                try Task.checkCancellation()
                 guard photoProcessingID == generation else { return }
                 selectedPhotoData = data
                 refreshImagePreview()
+            } catch is CancellationError {
+                return
             } catch {
                 guard photoProcessingID == generation else { return }
                 imageLoadError = error.localizedDescription
             }
         }
+        photoTasks.replace(.loading) { loadingTask.cancel() }
     }
 }
 
@@ -407,6 +499,9 @@ private struct CompanionAboutView: View {
                 }
                 Section("iOS scope") {
                     Text("This app sends content while in the foreground. Clock/weather/MQTT and background notification forwarding are Android-only.")
+                }
+                Section("Build") {
+                    Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"))")
                 }
             }
             .navigationTitle("About")

@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import signal
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -36,6 +37,8 @@ ICON_X = 56
 ICON_SIZE = 8
 ICON_FRAME_INTERVAL_MS = 500
 CLOCK_REFRESH_COALESCE_SECONDS = 0.2
+MAX_PENDING_ALERTS = 16
+MAX_QUEUED_DISPLAY_EVENTS = 32
 
 WEATHER_ICON_NAMES = {
     "sunny": "sunny", "clear-night": "clear-night", "partlycloudy": "partlycloudy",
@@ -435,7 +438,7 @@ def render_clocktemp_animation_frames(now: datetime, indoor: float | None,
     frame = render_clocktemp_frame(now, indoor, weather, speed_mbps, unit)
     if weather is None:
         return [frame]
-    asset_dir = icon_dir or Path(__file__).resolve().parent
+    asset_dir = icon_dir or (Path(__file__).resolve().parent.parent / "assets" / "weather-icons")
     moon_frames = _gif_icon_frames(
         asset_dir / f"moon_{wetter_moon_icon_id(now)}.gif", (ICON_X, 0, 64, ICON_SIZE)
     )
@@ -549,9 +552,12 @@ class SpotLedMqttService:
             self.text_time_ms = text_speed_ms(os.environ.get("SPOTLED_TEXT_SPEED", "normal"))
         except ValueError as exc:
             raise ValueError(f"Invalid SpotLED text setting: {exc}") from exc
-        self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=100)
+        self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=MAX_QUEUED_DISPLAY_EVENTS)
+        self.dropped_queue_events = 0
+        self.dropped_pending_alerts = 0
         self._clock_refresh_queued = False
         self.latest_weather: Weather | None = None
+        self.latest_weather_monotonic: float | None = None
         self._weather_revision = 0
         self._animated_weather_revision = 0
         self.latest_indoor_temperature: float | None = None
@@ -567,6 +573,37 @@ class SpotLedMqttService:
         if self.latest_weather is None or self.latest_weather.condition != weather.condition:
             self._weather_revision += 1
         self.latest_weather = weather
+        self.latest_weather_monotonic = time.monotonic()
+
+    def _queue_pending(self, pending: deque[Any], item: Any) -> None:
+        if item is CLOCK_REFRESH:
+            if CLOCK_REFRESH not in pending:
+                pending.append(CLOCK_REFRESH)
+            return
+        if isinstance(item, Notification):
+            alerts = sum(isinstance(queued, Notification) for queued in pending)
+            if alerts >= MAX_PENDING_ALERTS:
+                retained = deque()
+                removed = False
+                for queued in pending:
+                    if not removed and isinstance(queued, Notification):
+                        removed = True
+                        continue
+                    retained.append(queued)
+                pending.clear()
+                pending.extend(retained)
+                self.dropped_pending_alerts += 1
+                LOG.warning("Pending alert queue full; dropped oldest alert (total=%d)",
+                            self.dropped_pending_alerts)
+        pending.append(item)
+
+    def _queue_metrics(self) -> str:
+        age = None if self.latest_weather_monotonic is None else max(
+            0, int(time.monotonic() - self.latest_weather_monotonic))
+        freshness = "unknown" if age is None else f"{age}s"
+        return (f"queue={self.queue.qsize()}/{self.queue.maxsize}, "
+                f"dropped={self.dropped_queue_events + self.dropped_pending_alerts}, "
+                f"weather_age={freshness}")
 
     def _threadsafe_enqueue(self, item: Any) -> None:
         if self.loop is None:
@@ -582,9 +619,10 @@ class SpotLedMqttService:
             try:
                 self.queue.put_nowait(queued_item)
             except asyncio.QueueFull:
+                self.dropped_queue_events += 1
                 if item is CLOCK_REFRESH:
                     self._clock_refresh_queued = False
-                LOG.warning("Display queue is full; dropping the newest MQTT event")
+                LOG.warning("Display queue full; dropped newest event (%s)", self._queue_metrics())
 
         self.loop.call_soon_threadsafe(enqueue)
 
@@ -604,7 +642,7 @@ class SpotLedMqttService:
             except asyncio.QueueEmpty:
                 return
             if item is not CLOCK_REFRESH:
-                pending.append(item)
+                self._queue_pending(pending, item)
 
     def _on_connect(self, client, userdata, flags, reason_code, properties) -> None:
         if getattr(reason_code, "is_failure", False):
@@ -766,11 +804,10 @@ class SpotLedMqttService:
             if isinstance(item, Notification):
                 if not item.stack:
                     return item
-                pending.append(item)
+                self._queue_pending(pending, item)
             else:
                 # Coalesce minute/weather/speed refreshes while an alert is active.
-                if CLOCK_REFRESH not in pending:
-                    pending.append(CLOCK_REFRESH)
+                self._queue_pending(pending, CLOCK_REFRESH)
 
     async def _run(self) -> None:
         pending: deque[Any] = deque()
@@ -787,6 +824,7 @@ class SpotLedMqttService:
 
             notification = item
             while isinstance(notification, Notification):
+                LOG.info("Displaying MQTT alert (%s)", self._queue_metrics())
                 try:
                     await self._send(notification.text, notification.color)
                 except Exception:
@@ -802,6 +840,7 @@ class SpotLedMqttService:
 
     async def _safe_show_clock(self) -> None:
         try:
+            LOG.info("Composing ClockTemp snapshot (%s)", self._queue_metrics())
             await self._show_clock()
         except asyncio.CancelledError:
             raise

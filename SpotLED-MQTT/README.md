@@ -25,22 +25,25 @@ permission ([original flow](https://flows.blueforcer.de/flow/fGEhP0cZZd6E#instal
   alerts. Home Assistant mode requires a broker host and retained weather topic.
 - The base display is a 64×16 RGB raster approximation of ClockTemp002: date/time,
   optional TC001 indoor temperature, and outdoor temperature with an 8×8 Wetter.ax
-  condition icon. When the local ignored icon GIFs are present, weather updates
+  condition icon. The tracked canonical GIFs in `../assets/weather-icons/` are
+  shared with Android APK builds. Weather updates
   store the composed moon/weather frame before animating the two most distinct icon
   frames at 500 ms, so the stacked icons remain after finite playback; the speed bar
-  ends before the icon column. Without those
-  host-local assets, it falls back to the built-in static glyph. The clock refreshes
+  ends before the icon column. If an icon asset is unavailable, it falls back to
+  the built-in static glyph. The clock refreshes
   every minute and the TC001 temperature at startup and once per minute. MQTT alerts
   remain scrolling text. Clock/weather/speed refresh events close together are
   coalesced into one current-state render; NOAA is fetched as part of the same
   minute refresh at quarter-hour boundaries. Finite icon animation still primes
-  the persistent base frame before its two-frame playback.
+  the persistent base frame before its two-frame playback. Event buffering is
+  bounded to 32 queued display events and 16 pending stacked alerts; logs include
+  queue-drop totals and age of the most recent weather observation.
 - Select the weather source at launch with `--weather-source noaa` (default) or
   `--weather-source homeassistant`. NOAA mode reads the latest observation from
   the station named by `NOAA_WEATHER_STATION`, once at startup and every quarter
-  hour. NOAA mode does not show the Home Assistant speed bar. NOAA mode was
-  started with KSQL, and the user visually confirmed the status display and its
-  temperature difference from Loma Mar. The station path is hardware-validated.
+  hour. NOAA mode does not show the Home Assistant speed bar. The NOAA status
+  frame has been visually validated on hardware; station-specific readings are
+  intentionally omitted from this guide.
 - Home Assistant mode subscribes to `MQTT_WEATHER_TOPIC`, expecting retained
   JSON with Fahrenheit `temp` and condition string `cond`. It also enables the
   optional `MQTT_SPEED_TOPIC` throughput bar. Both settings are only used in HA mode.
@@ -113,15 +116,18 @@ latest state. Unexpected worker failures are logged and restarted after a bounde
 delay. Logs go to stdout/stderr for service-manager capture. BLE opens only while
 sending and closes after each transfer.
 
+Set `SPOTLED_LOCK_FILE` to an agreed local file path to coordinate this service
+with the Python CLI on the same host. This is an advisory local-process lock only;
+it does not reserve the display against a phone or another computer.
+
 The NOAA weather feed is from the U.S. National Weather Service API. NOAA content
 is generally public domain, and NOAA requests that its source/program be credited;
 see [NOAA's credit guidance](https://www.noaa.gov/office-education/outreach-communication/faq)
 and the [NWS API documentation](https://www.weather.gov/documentation/services-web-api).
 No machine-specific broker address, indoor-device address, station identifier,
 display identifier, or weather reading is included in this guide. MQTT notifications
-were previously validated. The user has confirmed the Home Assistant weather/speed
-path and ClockTemp-style frame work as expected. The user also visually confirmed
-the KSQL NOAA status frame and its temperature difference from Loma Mar. NOAA data
+were previously validated. The Home Assistant weather/speed path and ClockTemp-style
+frame have been confirmed on hardware, as has NOAA status rendering. NOAA data
 is attributed here; no station-specific reading is included. Start it manually
 when the display should be reserved for MQTT; stop it with Ctrl-C before using
 the companion app. Automatic startup is intentionally not configured, avoiding

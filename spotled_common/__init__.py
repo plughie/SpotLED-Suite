@@ -1,5 +1,7 @@
 """Reusable Python API for SpotLED Suite applications."""
 
+__version__ = "0.19.6"
+
 from .api import send_rgb_animation, send_rgb_frame, send_text
 from .settings import (
     DEFAULT_DEVICE_NAME,

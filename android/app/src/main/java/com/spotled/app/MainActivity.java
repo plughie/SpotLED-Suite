@@ -9,11 +9,8 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Matrix;
-import android.graphics.Movie;
 import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -39,13 +36,15 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /** Android app for previewing and sending text, still images, and sampled GIF animations. */
 public final class MainActivity extends Activity {
@@ -55,6 +54,7 @@ public final class MainActivity extends Activity {
     private static final String PREFS_NAME = "spotled_settings";
     private static final String PREF_THEME = "theme";
     private static final String PREF_RASTER_TEXT = "raster_text";
+    private static final String PREF_TEXT_ORIENTATION = "text_orientation";
     private static final String PREF_IMAGE_ROTATION = "image_rotation";
     private static final String PREF_IMAGE_FIT = "image_fit";
     private static final String PREF_LAST_DEVICE_NAME = "last_device_name";
@@ -65,9 +65,12 @@ public final class MainActivity extends Activity {
     private EditText textInput;
     private Spinner rotationSpinner;
     private Spinner fitSpinner;
+    private Spinner textOrientationSpinner;
     private Spinner textEffectSpinner;
     private Spinner textColorSpinner;
     private ImageView preview;
+    private Button sendPreviewButton;
+    private Runnable pendingPreviewSend;
     private SpotLedBleClient ble;
     private final Handler previewHandler = new Handler(Looper.getMainLooper());
     private Bitmap[] animatedPreviewFrames;
@@ -75,6 +78,9 @@ public final class MainActivity extends Activity {
     private int animatedPreviewFrameIndex;
     private boolean activityResumed;
     private boolean previewAnimationScheduled;
+    private final ExecutorService imageImportExecutor = Executors.newSingleThreadExecutor();
+    private Future<?> imageImportTask;
+    private int imageImportGeneration;
     private TextView notificationAccessStatus;
     private Runnable sendAfterDeviceSelection;
     private final Runnable previewAnimationTick = new Runnable() {
@@ -170,20 +176,17 @@ public final class MainActivity extends Activity {
         textInput.setHint("Enter a short message");
         page.addView(textInput);
 
-        rotationSpinner = new Spinner(this);
-        rotationSpinner.setAdapter(new ArrayAdapter<>(this,
+        TextView textOrientationLabel = new TextView(this);
+        textOrientationLabel.setText("Text orientation");
+        textOrientationLabel.setTextSize(16);
+        textOrientationLabel.setPadding(0, dp(8), 0, dp(2));
+        page.addView(textOrientationLabel);
+        textOrientationSpinner = new Spinner(this);
+        textOrientationSpinner.setAdapter(new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_dropdown_item,
-                new String[] {"0°", "90° clockwise", "180°", "270° clockwise"}));
-        restoreAndRememberSpinner(rotationSpinner, PREF_IMAGE_ROTATION, 4);
-        page.addView(rotationSpinner);
-
-        fitSpinner = new Spinner(this);
-        fitSpinner.setAdapter(new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_dropdown_item,
-                new String[] {"Contain (preserve all, may add padding)",
-                        "Cover (fill, crop edges)", "Stretch (fill, distort)"}));
-        restoreAndRememberSpinner(fitSpinner, PREF_IMAGE_FIT, 3);
-        page.addView(fitSpinner);
+                new String[] {"Landscape", "Portrait"}));
+        restoreAndRememberSpinner(textOrientationSpinner, PREF_TEXT_ORIENTATION, 2);
+        page.addView(textOrientationSpinner);
 
         TextView effectLabel = new TextView(this);
         effectLabel.setText("Text effect");
@@ -208,14 +211,45 @@ public final class MainActivity extends Activity {
         page.addView(textColorSpinner);
 
         Button sendText = new Button(this);
-        sendText.setText("Preview and send text");
+        sendText.setText("Preview text");
         sendText.setOnClickListener(view -> sendTextFrame());
         page.addView(sendText);
 
+        TextView imageLabel = new TextView(this);
+        imageLabel.setText("Image");
+        imageLabel.setTextSize(16);
+        imageLabel.setPadding(0, dp(18), 0, dp(4));
+        page.addView(imageLabel);
+        TextView imageOptionsNote = new TextView(this);
+        imageOptionsNote.setText("Rotation and fit apply to images only; choose text orientation in the Text section.");
+        imageOptionsNote.setTextSize(13);
+        page.addView(imageOptionsNote);
+
+        rotationSpinner = new Spinner(this);
+        rotationSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item,
+                new String[] {"0°", "90° clockwise", "180°", "270° clockwise"}));
+        restoreAndRememberSpinner(rotationSpinner, PREF_IMAGE_ROTATION, 4);
+        page.addView(rotationSpinner);
+
+        fitSpinner = new Spinner(this);
+        fitSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item,
+                new String[] {"Contain (preserve all, may add padding)",
+                        "Cover (fill, crop edges)", "Stretch (fill, distort)"}));
+        restoreAndRememberSpinner(fitSpinner, PREF_IMAGE_FIT, 3);
+        page.addView(fitSpinner);
+
         Button chooseImage = new Button(this);
-        chooseImage.setText("Choose and send image");
+        chooseImage.setText("Choose image or GIF");
         chooseImage.setOnClickListener(view -> openImagePicker());
         page.addView(chooseImage);
+
+        sendPreviewButton = new Button(this);
+        sendPreviewButton.setText("Send preview");
+        sendPreviewButton.setEnabled(false);
+        sendPreviewButton.setOnClickListener(view -> sendPreparedPreview());
+        page.addView(sendPreviewButton);
 
         preview = new ImageView(this);
         preview.setAdjustViewBounds(true);
@@ -227,7 +261,7 @@ public final class MainActivity extends Activity {
         page.addView(preview, previewParams);
 
         TextView note = new TextView(this);
-        note.setText("The preview is 64×16. GIF previews animate the same two sampled frames sent to the display at a safe pace, limited by the display's packet size. Transfers replace the display. BLE connects only during a send; an acknowledgment confirms receipt, not rendering.");
+        note.setText("Image Rotation/Fit affect images only. Text has Landscape and Portrait orientations; Portrait turns native 16×16 glyphs 270° clockwise and preserves the full message on the native scrolling path. Native text preview shows the initial viewport, not firmware marquee playback. GIF previews animate the same sampled frames sent to the display at a safe pace. Preview first, then send explicitly. Transfers replace the display; BLE connects only during a send, and an acknowledgment confirms receipt, not rendering.");
         note.setTextSize(13);
         note.setPadding(0, dp(12), 0, 0);
         page.addView(note);
@@ -280,7 +314,7 @@ public final class MainActivity extends Activity {
         content.addView(rasterSwitch);
 
         TextView rasterHelp = new TextView(this);
-        rasterHelp.setText("Off uses the display's native font for normal text. On sends text as pixels; rotation also requires raster text.");
+        rasterHelp.setText("Off uses the display's native font for landscape text. Portrait turns native 16×16 glyphs 270° clockwise and keeps firmware scrolling effects.");
         rasterHelp.setTextSize(13);
         content.addView(rasterHelp);
 
@@ -343,6 +377,11 @@ public final class MainActivity extends Activity {
         explanation.setTextSize(13);
         explanation.setPadding(0, dp(4), 0, dp(12));
         form.addView(explanation);
+        TextView handoff = new TextView(this);
+        handoff.setText("Manual handoff: turn this switch off, wait for the stopped status, then use Find and select display on the main screen. Turn the service back on when finished. This only coordinates this phone; another phone or computer may still connect.");
+        handoff.setTextSize(13);
+        handoff.setPadding(0, 0, 0, dp(12));
+        form.addView(handoff);
 
         EditText host = serviceField(form, "MQTT broker", "Host name or IP (optional for NOAA)",
                 preferences.getString(MqttStatusService.PREF_BROKER, ""),
@@ -401,7 +440,7 @@ public final class MainActivity extends Activity {
         source.setSelection("homeassistant".equals(preferences.getString(
                 MqttStatusService.PREF_WEATHER_SOURCE, "noaa")) ? 1 : 0);
         form.addView(source);
-        EditText station = serviceField(form, "NOAA station ID", "Example: KSQL",
+        EditText station = serviceField(form, "NOAA station ID", "Four-character station ID",
                 preferences.getString(MqttStatusService.PREF_NOAA_STATION, ""),
                 android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS, false);
         EditText weatherTopic = serviceField(form, "Home Assistant weather topic",
@@ -689,6 +728,7 @@ public final class MainActivity extends Activity {
     private void restoreAndRememberSpinner(Spinner spinner, String preferenceKey, int optionCount) {
         SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         int selection = preferences.getInt(preferenceKey, 0);
+        if (PREF_TEXT_ORIENTATION.equals(preferenceKey) && selection > 0) selection = 1;
         if (selection < 0 || selection >= optionCount) selection = 0;
         spinner.setSelection(selection);
         spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -814,27 +854,48 @@ public final class MainActivity extends Activity {
         int textTimeMs = textTimeMs(getSharedPreferences(PREFS_NAME, MODE_PRIVATE));
         boolean rasterText = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getBoolean(PREF_RASTER_TEXT, false);
-        int rotationDegrees = rotationSpinner.getSelectedItemPosition() * 90;
-        if (TextOutputMode.useNativeText(rasterText, rotationDegrees)) {
+        int[] textOrientations = {0, 270};
+        int textOrientation = textOrientations[textOrientationSpinner.getSelectedItemPosition()];
+        int colorIndex = textColorSpinner.getSelectedItemPosition();
+        if (textOrientation != 0) {
             clearAnimatedPreview();
-            preview.setImageBitmap(renderNativeTextPreview(message, textColorSpinner.getSelectedItemPosition()));
-            sendOrPromptForDisplay(
-                    () -> ble.sendNativeText(message, textColorSpinner.getSelectedItemPosition(),
-                            effectMode, textTimeMs),
-                    "Native-font preview ready.");
+            preview.setImageBitmap(renderNativeTextPreview(message, colorIndex, textOrientation));
+            preparePreview(() -> ble.sendRotatedNativeText(message, colorIndex,
+                            effectMode, textTimeMs, textOrientation),
+                    "Rotated native-font preview ready; scrolling retains the full text.",
+                    "Send text preview");
             return;
         }
-        RgbTransforms.Frame raster = CompactTextRaster.render(
-                message, textColorSpinner.getSelectedItemPosition());
-        sendRgbContent(raster.rgb, raster.width, raster.height, effectMode, textTimeMs);
+        if (TextOutputMode.useNativeText(rasterText, textOrientation)) {
+            clearAnimatedPreview();
+            preview.setImageBitmap(renderNativeTextPreview(message, colorIndex));
+            preparePreview(() -> ble.sendNativeText(message, colorIndex, effectMode, textTimeMs),
+                    "Native-font preview ready.", "Send text preview");
+            return;
+        }
+        CompactTextRaster.PanelFrames frames = CompactTextRaster.renderForPanel(
+                message, colorIndex, textOrientation);
+        clearAnimatedPreview();
+        preview.setImageBitmap(bitmapFromRgb(frames.preview.rgb,
+                frames.preview.width, frames.preview.height));
+        preparePreview(() -> ble.sendRgbFrame(frames.wire.rgb,
+                        SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT,
+                        effectMode, textTimeMs),
+                textOrientation == 0 ? "Raster text preview ready."
+                        : "Rotated native-font text is ready in 64×16 cells.",
+                "Send text preview");
     }
 
     private Bitmap renderNativeTextPreview(String text, int paletteIndex) {
+        return renderNativeTextPreview(text, paletteIndex, 0);
+    }
+
+    private Bitmap renderNativeTextPreview(String text, int paletteIndex, int glyphRotation) {
         int[] pixels = new int[SpotLedProtocol.SCREEN_WIDTH * SpotLedProtocol.SCREEN_HEIGHT];
         int[] codePoints = text.codePoints().toArray();
         int xStart = 0;
         for (int index = 0; index < codePoints.length && xStart < SpotLedProtocol.SCREEN_WIDTH; index++) {
-            byte[] glyph = SpotLedProtocol.nativeFontObject((char) codePoints[index]);
+            byte[] glyph = SpotLedProtocol.rotatedFontObject((char) codePoints[index], glyphRotation);
             int color = TextPalette.colorFor(paletteIndex, index, codePoints.length);
             for (int y = 0; y < 16; y++) {
                 int rowOffset = 14 + y * 2;
@@ -852,6 +913,9 @@ public final class MainActivity extends Activity {
 
     private void openImagePicker() {
         if (requireStatusServiceStopped()) return;
+        cancelImageImport();
+        pendingPreviewSend = null;
+        sendPreviewButton.setEnabled(false);
         if (Build.VERSION.SDK_INT >= 33) {
             Intent picker = new Intent(MediaStore.ACTION_PICK_IMAGES);
             picker.setType("image/*");
@@ -871,113 +935,80 @@ public final class MainActivity extends Activity {
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQUEST_IMAGE || resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        if (requireStatusServiceStopped()) return;
         Uri uri = data.getData();
-        try (InputStream gifInput = getContentResolver().openInputStream(uri)) {
-            Movie movie = Movie.decodeStream(gifInput);
-            if (movie != null && movie.duration() > 0) {
-                sendGif(movie);
-                return;
-            }
-        } catch (Exception exception) {
-            statusView.setText("Could not decode selected image: " + exception.getMessage());
-            return;
-        }
-        try (InputStream input = getContentResolver().openInputStream(uri)) {
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inSampleSize = 2;
-            Bitmap bitmap = BitmapFactory.decodeStream(input, null, options);
-            if (bitmap == null) throw new IllegalArgumentException("Unsupported or unreadable image.");
-            sendBitmap(bitmap, 0);
-        } catch (Exception exception) {
-            statusView.setText("Could not open image: " + exception.getMessage());
-        }
+        cancelImageImport();
+        final int generation = imageImportGeneration;
+        final int rotationDegrees = rotationSpinner.getSelectedItemPosition() * 90;
+        String[] fitModes = {"contain", "cover", "stretch"};
+        final String fitMode = fitModes[fitSpinner.getSelectedItemPosition()];
+        statusView.setText("Preparing image preview…");
+        imageImportTask = imageImportExecutor.submit(() -> {
+            ImageImportProcessor.Result result = null;
+            Exception failure = null;
+            try {
+                result = ImageImportProcessor.process(getApplicationContext(), uri,
+                        rotationDegrees, fitMode);
+            } catch (Exception exception) { failure = exception; }
+            ImageImportProcessor.Result completed = result;
+            Exception error = failure;
+            runOnUiThread(() -> {
+                if (generation != imageImportGeneration || isFinishing() || isDestroyed()) return;
+                imageImportTask = null;
+                if (error != null) {
+                    statusView.setText("Could not prepare image: " + error.getMessage());
+                    return;
+                }
+                if (completed == null || completed.frames.length == 0) {
+                    statusView.setText("Could not decode selected image.");
+                    return;
+                }
+                if (completed.animated && completed.frames.length > 1) {
+                    setAnimatedPreviewFrames(
+                            bitmapFromRgb(completed.frames[0], SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT),
+                            bitmapFromRgb(completed.frames[1], SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT),
+                            completed.intervalMs);
+                } else {
+                    clearAnimatedPreview();
+                    preview.setImageBitmap(bitmapFromRgb(completed.frames[0],
+                            SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT));
+                }
+                preparePreview(
+                        () -> {
+                            if (completed.animated)
+                                ble.sendRgbAnimation(completed.frames, SpotLedProtocol.SCREEN_WIDTH,
+                                        SpotLedProtocol.SCREEN_HEIGHT, completed.intervalMs);
+                            else ble.sendRgbFrame(completed.frames[0], SpotLedProtocol.SCREEN_WIDTH,
+                                    SpotLedProtocol.SCREEN_HEIGHT, 0, 500);
+                        }, completed.animated ? "GIF preview: showing " + completed.frames.length + " of "
+                                + completed.originalFrameCount + " source frames at "
+                                + completed.intervalMs + " ms/frame."
+                                : "Image preview ready.",
+                        completed.animated ? "Send GIF preview" : "Send image preview");
+            });
+        });
     }
 
-    private void sendBitmap(Bitmap source, int effectMode) {
+    private void cancelImageImport() {
+        imageImportGeneration++;
+        if (imageImportTask != null) imageImportTask.cancel(true);
+        imageImportTask = null;
+    }
+
+    private void preparePreview(Runnable sendAction, String message, String buttonLabel) {
+        pendingPreviewSend = sendAction;
+        sendPreviewButton.setText(buttonLabel);
+        sendPreviewButton.setEnabled(true);
+        statusView.setText(message);
+    }
+
+    private void sendPreparedPreview() {
         if (requireStatusServiceStopped()) return;
-        sendRgbContent(bitmapToRgb(source), source.getWidth(), source.getHeight(), effectMode);
-    }
-
-    private void sendGif(Movie movie) {
-        if (requireStatusServiceStopped()) return;
-        int sourceWidth = movie.width();
-        int sourceHeight = movie.height();
-        if (sourceWidth <= 0 || sourceHeight <= 0 || (long) sourceWidth * sourceHeight > 4_000_000L) {
-            statusView.setText("GIF dimensions are invalid or too large to process safely.");
-            return;
-        }
-        int duration = Math.max(1, movie.duration());
-        int sampleTime = Math.min(duration - 1, duration / 2);
-        Bitmap first = renderMovieFrame(movie, 0, sourceWidth, sourceHeight);
-        Bitmap second = renderMovieFrame(movie, sampleTime, sourceWidth, sourceHeight);
-        if (first == null || second == null) {
-            statusView.setText("Could not decode GIF frames.");
-            return;
-        }
-
-        RgbTransforms.Frame firstFrame = transformImage(first);
-        RgbTransforms.Frame secondFrame = transformImage(second);
-        int intervalMs = Math.max(250, Math.min(1000, duration / 2));
-        setAnimatedPreviewFrames(
-                bitmapFromRgb(firstFrame.rgb, firstFrame.width, firstFrame.height),
-                bitmapFromRgb(secondFrame.rgb, secondFrame.width, secondFrame.height),
-                intervalMs);
-        // The tested receive buffer only fits two 64x16 RGB frames. Clamp timing to
-        // 250 ms/frame so GIFs with very short source delays do not flash rapidly.
-        sendOrPromptForDisplay(
-                () -> ble.sendRgbAnimation(new byte[][] {firstFrame.rgb, secondFrame.rgb},
-                        SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT, intervalMs),
-                "Animated GIF preview ready.");
-    }
-
-    private Bitmap renderMovieFrame(Movie movie, int timeMs, int width, int height) {
-        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(bitmap);
-        canvas.drawColor(Color.BLACK);
-        movie.setTime(timeMs);
-        movie.draw(canvas, 0, 0);
-        return bitmap;
-    }
-
-    private RgbTransforms.Frame transformImage(Bitmap source) {
-        RgbTransforms.Frame oriented = RgbTransforms.rotate(
-                bitmapToRgb(source), source.getWidth(), source.getHeight(),
-                rotationSpinner.getSelectedItemPosition() * 90);
-        String[] modes = {"contain", "cover", "stretch"};
-        return RgbTransforms.fit(oriented.rgb, oriented.width, oriented.height,
-                SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT,
-                modes[fitSpinner.getSelectedItemPosition()]);
-    }
-
-    private void sendRgbContent(byte[] sourceRgb, int sourceWidth, int sourceHeight, int effectMode) {
-        sendRgbContent(sourceRgb, sourceWidth, sourceHeight, effectMode, 500);
-    }
-
-    private void sendRgbContent(byte[] sourceRgb, int sourceWidth, int sourceHeight,
-                                int effectMode, int frameIntervalMs) {
-        if (requireStatusServiceStopped()) return;
-        int rotation = rotationSpinner.getSelectedItemPosition() * 90;
-        RgbTransforms.Frame fitted = transformImage(
-                bitmapFromRgb(sourceRgb, sourceWidth, sourceHeight));
-        Bitmap previewBitmap = bitmapFromRgb(fitted.rgb, fitted.width, fitted.height);
-        clearAnimatedPreview();
-        preview.setImageBitmap(previewBitmap);
-        sendOrPromptForDisplay(
-                () -> ble.sendRgbFrame(fitted.rgb, fitted.width, fitted.height,
-                        effectMode, frameIntervalMs),
-                effectMode == 0 ? "Image preview ready." : "Text preview ready.");
-    }
-
-    private byte[] bitmapToRgb(Bitmap bitmap) {
-        int[] argb = new int[bitmap.getWidth() * bitmap.getHeight()];
-        bitmap.getPixels(argb, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
-        byte[] rgb = new byte[argb.length * 3];
-        for (int i = 0, offset = 0; i < argb.length; i++) {
-            rgb[offset++] = (byte) Color.red(argb[i]);
-            rgb[offset++] = (byte) Color.green(argb[i]);
-            rgb[offset++] = (byte) Color.blue(argb[i]);
-        }
-        return rgb;
+        Runnable sendAction = pendingPreviewSend;
+        if (sendAction == null) return;
+        pendingPreviewSend = null;
+        sendPreviewButton.setEnabled(false);
+        sendOrPromptForDisplay(sendAction, "Preview ready.");
     }
 
     private Bitmap bitmapFromRgb(byte[] rgb, int width, int height) {
@@ -1029,6 +1060,8 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        cancelImageImport();
+        imageImportExecutor.shutdownNow();
         clearAnimatedPreview();
         if (ble != null) ble.close();
         super.onDestroy();

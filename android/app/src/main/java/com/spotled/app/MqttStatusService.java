@@ -37,10 +37,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 /** User-started Android foreground service for MQTT alerts and ClockTemp status. */
@@ -66,6 +70,8 @@ public final class MqttStatusService extends Service {
     private static final String PREF_MQTT_CLIENT_ID = "mqtt_client_id";
     private static final String CHANNEL_ID = "spotled_status_service";
     private static final int NOTIFICATION_ID = 1701;
+    private static final int MAX_PENDING_ALERTS = 16;
+    private static final int MAX_DISPLAY_BACKLOG = 32;
     private static final Pattern STATION_ID = Pattern.compile("[A-Z0-9]{3,5}");
     private static final String PREF_LAST_DEVICE_NAME = "last_device_name";
     private static final String PREF_LAST_DEVICE_ADDRESS = "last_device_address";
@@ -76,7 +82,7 @@ public final class MqttStatusService extends Service {
     private ScheduledExecutorService timers;
     private ExecutorService network;
     private ExecutorService mqttConnector;
-    private ExecutorService displayQueue;
+    private ThreadPoolExecutor displayQueue;
     private MqttClient mqtt;
     private SpotLedBleClient ble;
     private SharedPreferences preferences;
@@ -93,6 +99,12 @@ public final class MqttStatusService extends Service {
     private Float speedMbps;
     private MqttPayloads.Alert activeAlert;
     private long alertGeneration;
+    private volatile int pendingAlertCount;
+    private volatile int droppedAlerts;
+    private volatile int droppedDisplayTasks;
+    private volatile long weatherUpdatedAtMillis;
+    private final AtomicBoolean clockRefreshRequested = new AtomicBoolean();
+    private final AtomicBoolean clockRefreshTaskScheduled = new AtomicBoolean();
     private volatile boolean stopping;
     private boolean phoneNotificationReceiverRegistered;
     private final BroadcastReceiver phoneNotificationReceiver = new BroadcastReceiver() {
@@ -125,7 +137,7 @@ public final class MqttStatusService extends Service {
                     Log.w(TAG, "Companion alert contained no displayable text");
                 return;
             }
-            displayQueue.execute(() -> {
+            executeDisplay(() -> {
                 Log.i(TAG, "Phone notification alert queued from " + packageName);
                 enqueueAlert(alert);
             });
@@ -259,7 +271,9 @@ public final class MqttStatusService extends Service {
         timers = Executors.newScheduledThreadPool(2, runnable -> daemon(runnable, "spotled-status-timer"));
         network = Executors.newSingleThreadExecutor(runnable -> daemon(runnable, "spotled-status-network"));
         mqttConnector = Executors.newSingleThreadExecutor(runnable -> daemon(runnable, "spotled-mqtt-connection"));
-        displayQueue = Executors.newSingleThreadExecutor(runnable -> daemon(runnable, "spotled-status-display"));
+        displayQueue = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(MAX_DISPLAY_BACKLOG),
+                runnable -> daemon(runnable, "spotled-status-display"));
         ble = new SpotLedBleClient(getApplicationContext(), new SpotLedBleClient.Listener() {
             @Override public void onStatus(String message) {
                 updateStatus(message);
@@ -271,7 +285,7 @@ public final class MqttStatusService extends Service {
             return;
         }
         if (mqttEnabled) connectMqtt(host, port);
-        displayQueue.execute(this::showClockFrame);
+        executeDisplay(this::showClockFrame);
         scheduleClockAndIndoor();
         if ("noaa".equals(weatherSource)) scheduleNoaaRefresh(0);
         updateStatus(mqttEnabled ? "Running; connecting to MQTT" : "Running NOAA clock/weather without MQTT");
@@ -361,6 +375,7 @@ public final class MqttStatusService extends Service {
             MqttPayloads.Weather weather = MqttPayloads.parseHomeAssistantWeather(payload);
             if (weather != null) {
                 currentWeather = weather;
+                weatherUpdatedAtMillis = System.currentTimeMillis();
                 enqueueClockRefresh();
             }
             return;
@@ -374,12 +389,12 @@ public final class MqttStatusService extends Service {
             return;
         }
         if (!notifyTopic.isEmpty() && MqttPayloads.isDismissTopic(topic, notifyTopic)) {
-            displayQueue.execute(this::dismissAlert);
+            executeDisplay(this::dismissAlert);
             return;
         }
         if (!notifyTopic.isEmpty() && topic.equals(notifyTopic)) {
             MqttPayloads.Alert alert = MqttPayloads.parseAlert(payload);
-            if (alert != null) displayQueue.execute(() -> enqueueAlert(alert));
+            if (alert != null) executeDisplay(() -> enqueueAlert(alert));
         }
     }
 
@@ -444,6 +459,7 @@ public final class MqttStatusService extends Service {
             MqttPayloads.Weather parsed = MqttPayloads.parseNoaaObservation(response);
             if (parsed != null) {
                 currentWeather = parsed;
+                weatherUpdatedAtMillis = System.currentTimeMillis();
                 enqueueClockRefresh();
             }
         });
@@ -481,19 +497,36 @@ public final class MqttStatusService extends Service {
     }
 
     private void enqueueClockRefresh() {
-        if (displayQueue != null && !stopping)
-            displayQueue.execute(() -> {
-                if (activeAlert == null) showClockFrame();
-            });
+        if (displayQueue == null || stopping) return;
+        clockRefreshRequested.set(true);
+        if (!clockRefreshTaskScheduled.compareAndSet(false, true)) return;
+        if (!executeDisplay(() -> {
+            try {
+                do {
+                    clockRefreshRequested.set(false);
+                    if (activeAlert == null) showClockFrame();
+                } while (clockRefreshRequested.get() && !stopping);
+            } finally {
+                clockRefreshTaskScheduled.set(false);
+                if (clockRefreshRequested.get() && !stopping) enqueueClockRefresh();
+            }
+        })) clockRefreshTaskScheduled.set(false);
     }
 
     private void enqueueAlert(MqttPayloads.Alert alert) {
         if (alert.stack && activeAlert != null) {
+            if (pendingAlerts.size() >= MAX_PENDING_ALERTS) {
+                pendingAlerts.removeFirst();
+                droppedAlerts++;
+                Log.w(TAG, "Pending alert queue full; dropping oldest alert (total=" + droppedAlerts + ")");
+            }
             pendingAlerts.addLast(alert);
+            pendingAlertCount = pendingAlerts.size();
             return;
         }
         if (!alert.stack) {
             pendingAlerts.clear();
+            pendingAlertCount = 0;
             activeAlert = null;
             alertGeneration++;
         }
@@ -515,7 +548,7 @@ public final class MqttStatusService extends Service {
             }
         }
         if (!alert.hold && timers != null)
-            timers.schedule(() -> displayQueue.execute(() -> finishAlert(generation)),
+            timers.schedule(() -> executeDisplay(() -> finishAlert(generation)),
                     alert.durationMs, TimeUnit.MILLISECONDS);
     }
 
@@ -533,7 +566,11 @@ public final class MqttStatusService extends Service {
     }
 
     private void showNextOrClock() {
-        if (!pendingAlerts.isEmpty()) showAlert(pendingAlerts.removeFirst());
+        if (!pendingAlerts.isEmpty()) {
+            MqttPayloads.Alert next = pendingAlerts.removeFirst();
+            pendingAlertCount = pendingAlerts.size();
+            showAlert(next);
+        }
         else showClockFrame();
     }
 
@@ -573,6 +610,30 @@ public final class MqttStatusService extends Service {
         return ble != null && !ble.isTransferInProgress() && ble.wasLastTransferAcknowledged();
     }
 
+    private boolean executeDisplay(Runnable task) {
+        ThreadPoolExecutor queue = displayQueue;
+        if (queue == null || stopping) return false;
+        try {
+            queue.execute(task);
+            return true;
+        } catch (RejectedExecutionException exception) {
+            droppedDisplayTasks++;
+            Log.w(TAG, "Display backlog full; dropped event (" + queueMetrics() + ")");
+            updateStatus("Display queue busy; one event was dropped");
+            return false;
+        }
+    }
+
+    private String queueMetrics() {
+        int backlog = displayQueue == null ? 0 : displayQueue.getQueue().size();
+        String freshness = weatherUpdatedAtMillis == 0 ? "unknown"
+                : Math.max(0, (System.currentTimeMillis() - weatherUpdatedAtMillis) / 60_000) + "m ago";
+        return "alerts " + pendingAlertCount + "/" + MAX_PENDING_ALERTS
+                + ", backlog " + backlog + "/" + MAX_DISPLAY_BACKLOG
+                + ", drops " + (droppedAlerts + droppedDisplayTasks)
+                + ", weather " + freshness;
+    }
+
     private void updateStatus(String message) {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification(message));
@@ -602,6 +663,7 @@ public final class MqttStatusService extends Service {
         builder.setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle("SPOTLED Companion status service")
                 .setContentText(content)
+                .setSubText(queueMetrics())
                 .setContentIntent(contentIntent)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)

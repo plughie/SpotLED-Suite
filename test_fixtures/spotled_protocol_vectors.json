@@ -1,0 +1,45 @@
+{
+  "format_version": 1,
+  "rotations_rgb": {
+    "width": 2,
+    "height": 3,
+    "input_hex": "0102030405060708090a0b0c0d0e0f101112",
+    "expected": {
+      "0": {
+        "width": 2,
+        "height": 3,
+        "hex": "0102030405060708090a0b0c0d0e0f101112"
+      },
+      "90": {
+        "width": 3,
+        "height": 2,
+        "hex": "0d0e0f0708090102031011120a0b0c040506"
+      },
+      "180": {
+        "width": 2,
+        "height": 3,
+        "hex": "1011120d0e0f0a0b0c070809040506010203"
+      },
+      "270": {
+        "width": 3,
+        "height": 2,
+        "hex": "0405060a0b0c1011120102030708090d0e0f"
+      }
+    }
+  },
+  "native_text_unicode": {
+    "bmp_fallback_codepoint": 233,
+    "glyph_object_hex": "0000002f000d010010001000e9200000000000003fc03fc0003c003c03c003c00000000003c003c000000000000018",
+    "character_text_object_hex": "00000009000300e9f5",
+    "non_bmp_example": "🦆"
+  },
+  "black_frame_64x16_1000ms": {
+    "width": 64,
+    "height": 16,
+    "interval_ms": 1000,
+    "effect_mode": 0,
+    "payload_length": 3126,
+    "payload_sha256": "d451cab10f0409f7e1e9c8369a70d64b575e03ca225972649cb48f5465878611",
+    "payload_prefix_hex": "0000000f80040000000100000c27c700000009000b00011500000c0c0060004000101800000000000000"
+  }
+}

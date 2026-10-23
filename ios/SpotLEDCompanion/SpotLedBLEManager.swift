@@ -31,23 +31,16 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
     private var notificationsRequested = false
     private var isReady = false
     private var nextSerial: UInt16 = 1
+    private var capabilityResponse: [UInt8]?
+    private var activeReceiveLimit = SpotLEDProtocol.maxReceiveBytes
     private var scanTimeout: DispatchWorkItem?
-    private var readyContinuation: CheckedContinuation<Void, Error>?
-    private var readyToken: UUID?
-    private var readySessionID: UUID?
+    private let transferSession = BLETransferSession()
     private var disconnectContinuation: CheckedContinuation<Void, Never>?
     private var disconnectToken: UUID?
     private var disconnectSessionID: UUID?
-    private var acknowledgementContinuation:
-        (sessionID: UUID, type: UInt8, serial: UInt16, continuation: CheckedContinuation<Void, Error>)?
-    private var acknowledgementToken: UUID?
-    private var pendingChunks: [Data] = []
-    private var chunkContinuation: CheckedContinuation<Void, Error>?
-    private var chunkToken = UUID()
-    private var chunkSessionID: UUID?
-    private var activeTransferID: UUID?
-    private var cancellationRequested = false
     private var finishingAcknowledgedTransfer = false
+
+    private var activeTransferID: UUID? { transferSession.activeSessionID }
 
     override init() {
         super.init()
@@ -87,29 +80,18 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
     }
 
     func cancelTransfer() {
+        cancelTransfer(with: SpotLEDProtocolError.cancelled)
+    }
+
+    private func cancelTransfer(with error: Error) {
         stopScan()
         guard isSending else { return }
         guard !finishingAcknowledgedTransfer else {
             status = "Transfer acknowledged; disconnecting…"
             return
         }
-        cancellationRequested = true
+        transferSession.cancelActive(with: error)
         status = "Cancelling the display transfer…"
-        if readyContinuation != nil {
-            finishReady(.failure(SpotLEDProtocolError.cancelled), sessionID: activeTransferID)
-        }
-        if let waiter = acknowledgementContinuation {
-            acknowledgementContinuation = nil
-            acknowledgementToken = nil
-            waiter.continuation.resume(throwing: SpotLEDProtocolError.cancelled)
-        }
-        pendingChunks.removeAll()
-        chunkToken = UUID()
-        chunkSessionID = nil
-        if let continuation = chunkContinuation {
-            chunkContinuation = nil
-            continuation.resume(throwing: SpotLEDProtocolError.cancelled)
-        }
         if let peripheral = activePeripheral,
            central.state == .poweredOn,
            peripheral.state == .connected || peripheral.state == .connecting {
@@ -135,10 +117,14 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
                   effectMode: UInt8, rotation: Int, fit: ImageFit,
                   rasterRequested: Bool, intervalMs: UInt16) async {
         do {
-            if !rasterRequested && rotation == 0 {
+            if rotation != 0 || (!rasterRequested && rotation == 0) {
                 let payloads = try SpotLEDProtocol.buildNativeTextPayloads(
-                    text, color: color, effectMode: effectMode, intervalMs: intervalMs)
+                    text, color: color, effectMode: effectMode, intervalMs: intervalMs,
+                    glyphRotation: rotation)
                 try await sendUsingSelectedDisplay { sessionID in
+                    let capabilities = try await self.queryCapabilities(sessionID: sessionID)
+                    try SpotLEDProtocol.validateNativeText(payloads,
+                                                           receiveBytes: capabilities.receiveBytes)
                     guard let peripheral = self.activePeripheral,
                           let command = self.commandCharacteristic else {
                         throw SpotLEDProtocolError.missingCharacteristic
@@ -152,11 +138,15 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
                     for payload in payloads { try await self.transfer(payload, sessionID: sessionID) }
                 }
             } else {
-                let frame = RGBRasterizer.textFrame(text, color: color,
-                                                    rotation: rotation, fit: fit)
+                let orientation = TextPanelOrientation(rotationDegrees: rotation)
+                let frame = RGBRasterizer.textFrames(text, color: color,
+                                                     orientation: orientation).wire
                 let payload = try SpotLEDProtocol.buildRGBFramePayload(
                     frame.bytes, intervalMs: intervalMs, effectMode: effectMode)
                 try await sendUsingSelectedDisplay { sessionID in
+                    let capabilities = try await self.queryCapabilities(sessionID: sessionID)
+                    try SpotLEDProtocol.validateRGB(capabilities, frameCount: 1,
+                                                    payloadBytes: payload.count)
                     try await self.transfer(payload, sessionID: sessionID)
                 }
             }
@@ -170,6 +160,9 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
             let frame = try RGBRasterizer.imageFrame(image, rotation: rotation, fit: fit)
             let payload = try SpotLEDProtocol.buildRGBFramePayload(frame.bytes)
             try await sendUsingSelectedDisplay { sessionID in
+                let capabilities = try await self.queryCapabilities(sessionID: sessionID)
+                try SpotLEDProtocol.validateRGB(capabilities, frameCount: 1,
+                                                payloadBytes: payload.count)
                 try await self.transfer(payload, sessionID: sessionID)
             }
         } catch {
@@ -181,6 +174,9 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
         do {
             let payload = try SpotLEDProtocol.buildRGBAnimationPayload(frames, intervalMs: intervalMs)
             try await sendUsingSelectedDisplay { sessionID in
+                let capabilities = try await self.queryCapabilities(sessionID: sessionID)
+                try SpotLEDProtocol.validateRGB(capabilities, frameCount: frames.count,
+                                                payloadBytes: payload.count)
                 try await self.transfer(payload, sessionID: sessionID)
             }
         } catch {
@@ -200,14 +196,11 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
             quarantinedPeripheralIDs.remove(peripheral.identifier)
         }
         isSending = true
-        let sessionID = UUID()
-        activeTransferID = sessionID
+        let sessionID = transferSession.begin()
         finishingAcknowledgedTransfer = false
-        cancellationRequested = false
         defer {
-            if activeTransferID == sessionID { activeTransferID = nil }
+            transferSession.finish(sessionID)
             finishingAcknowledgedTransfer = false
-            cancellationRequested = false
             isSending = false
         }
         stopScan()
@@ -245,9 +238,7 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
     }
 
     private func checkCancellation(_ sessionID: UUID) throws {
-        if activeTransferID != sessionID || cancellationRequested || Task.isCancelled {
-            throw SpotLEDProtocolError.cancelled
-        }
+        try transferSession.check(sessionID)
     }
 
     private func connectAndWaitUntilReady(_ peripheral: CBPeripheral, sessionID: UUID) async throws {
@@ -259,24 +250,16 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
         notificationsRequested = false
         isReady = false
         peripheral.delegate = self
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let token = UUID()
-            readyToken = token
-            readySessionID = sessionID
-            readyContinuation = continuation
+        try await transferSession.wait(for: .ready, sessionID: sessionID,
+                                       timeout: 20,
+                                       timeoutError: SpotLEDProtocolError.timeout("BLE connection")) {
             central.connect(peripheral, options: nil)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self, weak peripheral] in
-                guard let self, let peripheral, self.activeTransferID == sessionID,
-                      self.activePeripheral?.identifier == peripheral.identifier,
-                      self.readyToken == token, self.readyContinuation != nil else { return }
-                self.finishReady(.failure(SpotLEDProtocolError.timeout("BLE connection")), sessionID: sessionID)
-            }
         }
     }
 
     private func transfer(_ payload: [UInt8], sessionID: UUID) async throws {
         try checkCancellation(sessionID)
-        guard payload.count <= SpotLEDProtocol.maxReceiveBytes else {
+        guard payload.count <= activeReceiveLimit else {
             throw SpotLEDProtocolError.transferTooLarge
         }
         let serial = nextSerial
@@ -295,6 +278,49 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
         try checkCancellation(sessionID)
     }
 
+    private func queryCapabilities(sessionID: UUID) async throws -> SpotLEDDeviceCapabilities {
+        let screenSerial = nextQuerySerial()
+        let screen = try await queryResponse(id: 0x12, responseID: 0x13,
+                                             serial: screenSerial, sessionID: sessionID)
+        let animationSerial = nextQuerySerial()
+        let animation = try await queryResponse(id: 0x1a, responseID: 0x1b,
+                                                serial: animationSerial, sessionID: sessionID)
+        let capacitySerial = nextQuerySerial()
+        let capacity = try await queryResponse(id: 0x14, responseID: 0x15,
+                                               serial: capacitySerial, sessionID: sessionID)
+        let capabilities = try SpotLEDProtocol.parseCapabilities(
+            screen: screen, animation: animation, capacity: capacity,
+            screenSerial: screenSerial, animationSerial: animationSerial,
+            capacitySerial: capacitySerial)
+        activeReceiveLimit = capabilities.receiveBytes
+        return capabilities
+    }
+
+    private func nextQuerySerial() -> UInt16 {
+        let value = nextSerial
+        nextSerial &+= 1
+        return value
+    }
+
+    private func queryResponse(id: UInt8, responseID: UInt8, serial: UInt16,
+                               sessionID: UUID) async throws -> [UInt8] {
+        guard activeTransferID == sessionID,
+              let peripheral = activePeripheral, let command = commandCharacteristic else {
+            throw SpotLEDProtocolError.missingCharacteristic
+        }
+        capabilityResponse = nil
+        try await transferSession.wait(for: .response(type: responseID, serial: serial),
+                                       sessionID: sessionID, timeout: 6,
+                                       timeoutError: SpotLEDProtocolError.timeout("capability query")) {
+            peripheral.writeValue(Data(SpotLEDProtocol.buildQuery(id: id, serial: serial)),
+                                  for: command, type: .withoutResponse)
+        }
+        guard let response = capabilityResponse else {
+            throw SpotLEDProtocolError.transport("The display capability response was lost.")
+        }
+        return response
+    }
+
     private func sendCommandAndWait(_ bytes: [UInt8], expectedType: UInt8,
                                     serial: UInt16, timeout: TimeInterval,
                                     sessionID: UUID) async throws {
@@ -303,22 +329,11 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
               let peripheral = activePeripheral, let command = commandCharacteristic else {
             throw SpotLEDProtocolError.missingCharacteristic
         }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let token = UUID()
-            acknowledgementToken = token
-            acknowledgementContinuation = (sessionID, expectedType, serial, continuation)
+        try await transferSession.wait(
+            for: .acknowledgement(type: expectedType, serial: serial),
+            sessionID: sessionID, timeout: timeout,
+            timeoutError: SpotLEDProtocolError.timeout("transfer")) {
             peripheral.writeValue(Data(bytes), for: command, type: .withoutResponse)
-            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
-                guard let self,
-                      self.activeTransferID == sessionID,
-                      self.acknowledgementToken == token,
-                      let waiter = self.acknowledgementContinuation,
-                      waiter.sessionID == sessionID,
-                      waiter.type == expectedType, waiter.serial == serial else { return }
-                self.acknowledgementContinuation = nil
-                self.acknowledgementToken = nil
-                waiter.continuation.resume(throwing: SpotLEDProtocolError.timeout("transfer"))
-            }
         }
     }
 
@@ -331,41 +346,27 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
         let chunkSize = min(maximumChunkSize,
                             peripheral.maximumWriteValueLength(for: .withoutResponse))
         guard chunkSize > 0 else { throw SpotLEDProtocolError.transport("Bluetooth reported a zero write size.") }
-        pendingChunks = stride(from: 0, to: payload.count, by: chunkSize).map { offset in
-            Data(payload[offset..<min(payload.count, offset + chunkSize)])
-        }
-        chunkSessionID = sessionID
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            chunkContinuation = continuation
-            let token = UUID()
-            chunkToken = token
-            pumpChunks(sessionID: sessionID)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-                guard let self, self.activeTransferID == sessionID,
-                      self.chunkSessionID == sessionID, self.chunkToken == token,
-                      let continuation = self.chunkContinuation else { return }
-                self.chunkContinuation = nil
-                self.chunkSessionID = nil
-                self.pendingChunks.removeAll()
-                self.chunkToken = UUID()
-                continuation.resume(throwing: SpotLEDProtocolError.timeout("BLE data writes"))
-            }
+        try transferSession.enqueueChunks(payload, size: chunkSize, sessionID: sessionID)
+        try await transferSession.wait(for: .chunkWrites, sessionID: sessionID,
+                                       timeout: 15,
+                                       timeoutError: SpotLEDProtocolError.timeout("BLE data writes")) {
+            self.pumpChunks(sessionID: sessionID)
         }
         _ = data // Retain the discovered data characteristic through the write loop.
     }
 
     private func pumpChunks(sessionID: UUID) {
-        guard activeTransferID == sessionID, chunkSessionID == sessionID else { return }
+        guard activeTransferID == sessionID,
+              transferSession.waitingPhase == .chunkWrites else { return }
         guard let peripheral = activePeripheral, let data = dataCharacteristic else { return }
-        while !pendingChunks.isEmpty && peripheral.canSendWriteWithoutResponse {
-            let chunk = pendingChunks.removeFirst()
+        while peripheral.canSendWriteWithoutResponse,
+              let chunk = transferSession.dequeueChunk(sessionID: sessionID) {
             peripheral.writeValue(chunk, for: data, type: .withoutResponse)
         }
-        if pendingChunks.isEmpty, let continuation = chunkContinuation {
-            chunkContinuation = nil
-            chunkSessionID = nil
+        if transferSession.queuedChunkCount == 0,
+           transferSession.waitingPhase == .chunkWrites {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                continuation.resume()
+                self.transferSession.resolve(.chunkWrites, sessionID: sessionID, with: .success(()))
             }
         }
     }
@@ -398,16 +399,9 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
         }
     }
 
-    private func finishReady(_ result: Result<Void, Error>, sessionID: UUID? = nil) {
-        guard let continuation = readyContinuation else { return }
-        if let sessionID, readySessionID != sessionID { return }
-        readyContinuation = nil
-        readyToken = nil
-        readySessionID = nil
-        switch result {
-        case .success: isReady = true; continuation.resume()
-        case .failure(let error): continuation.resume(throwing: error)
-        }
+    private func finishReady(_ result: Result<Void, Error>, sessionID: UUID) {
+        if case .success = result { isReady = true }
+        transferSession.resolve(.ready, sessionID: sessionID, with: result)
     }
 
     private func finishDisconnect(token: UUID? = nil, sessionID: UUID? = nil) {
@@ -441,11 +435,17 @@ extension SpotLedBLEManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state != .poweredOn {
             stopScan()
-            if isSending { cancelTransfer() }
+            if isSending {
+                let error: Error = central.state == .poweredOff
+                    ? SpotLEDProtocolError.bluetoothUnavailable
+                    : SpotLEDProtocolError.cancelled
+                cancelTransfer(with: error)
+            }
         }
         switch central.state {
         case .poweredOn: status = "Bluetooth ready. Find a nearby SpotLED display."
-        case .poweredOff: status = "Bluetooth is off. Turn it on to find a display."
+        case .poweredOff:
+            status = "Bluetooth is off. Turn it on to find a display."
         case .unauthorized: status = "Allow Bluetooth access for SpotLED Companion in Settings."
         case .unsupported: status = "This iPhone does not support Bluetooth LE."
         default: status = "Checking Bluetooth…"
@@ -498,22 +498,8 @@ extension SpotLedBLEManager: CBCentralManagerDelegate {
             quarantinedPeripheralIDs.remove(peripheral.identifier)
             return
         }
-        if readyContinuation != nil {
-            finishReady(.failure(error ?? SpotLEDProtocolError.transport("Disconnected before the display was ready.")),
-                        sessionID: sessionID)
-        }
-        if let waiter = acknowledgementContinuation {
-            acknowledgementContinuation = nil
-            acknowledgementToken = nil
-            waiter.continuation.resume(throwing: error ?? SpotLEDProtocolError.transport("Disconnected during transfer."))
-        }
-        pendingChunks.removeAll()
-        if let continuation = chunkContinuation {
-            chunkContinuation = nil
-            chunkToken = UUID()
-            chunkSessionID = nil
-            continuation.resume(throwing: error ?? SpotLEDProtocolError.transport("Disconnected during BLE data writes."))
-        }
+        let disconnectError = error ?? SpotLEDProtocolError.transport("Disconnected during BLE transfer.")
+        transferSession.connectionLost(sessionID: sessionID, error: disconnectError)
         if disconnectContinuation != nil {
             finishDisconnect(sessionID: sessionID)
         }
@@ -573,28 +559,37 @@ extension SpotLedBLEManager: CBPeripheralDelegate {
                     error: Error?) {
         guard activePeripheral?.identifier == peripheral.identifier,
               characteristic.uuid == Self.commandUUID,
-              let waiter = acknowledgementContinuation,
-              waiter.sessionID == activeTransferID else { return }
+              let sessionID = activeTransferID,
+              let phase = transferSession.waitingPhase else { return }
         if let error {
-            acknowledgementContinuation = nil
-            acknowledgementToken = nil
-            waiter.continuation.resume(throwing: error)
+            transferSession.resolve(phase, sessionID: sessionID, with: .failure(error))
             return
         }
-        guard let value = characteristic.value,
-              let status = SpotLEDProtocol.acknowledgment(value,
-                                                         expectedType: waiter.type,
-                                                         serial: waiter.serial) else { return }
-        acknowledgementContinuation = nil
-        acknowledgementToken = nil
-        if status == 0 { waiter.continuation.resume() }
-        else { waiter.continuation.resume(throwing: SpotLEDProtocolError.rejected(status)) }
+        guard let value = characteristic.value else { return }
+        switch phase {
+        case let .acknowledgement(type, serial):
+            guard let status = SpotLEDProtocol.acknowledgment(value,
+                                                             expectedType: type,
+                                                             serial: serial) else { return }
+            let result: Result<Void, Error> = status == 0
+                ? .success(())
+                : .failure(SpotLEDProtocolError.rejected(status))
+            transferSession.resolve(phase, sessionID: sessionID, with: result)
+        case let .response(type, serial):
+            let bytes = [UInt8](value)
+            guard bytes.count >= 5, Int(bytes[0]) == bytes.count,
+                  bytes[1] == type, (UInt16(bytes[2]) << 8 | UInt16(bytes[3])) == serial else { return }
+            capabilityResponse = bytes
+            transferSession.resolve(phase, sessionID: sessionID, with: .success(()))
+        case .ready, .chunkWrites:
+            return
+        }
     }
 
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
         guard activePeripheral?.identifier == peripheral.identifier,
-              let sessionID = chunkSessionID,
-              sessionID == activeTransferID else { return }
+              let sessionID = activeTransferID,
+              transferSession.waitingPhase == .chunkWrites else { return }
         pumpChunks(sessionID: sessionID)
     }
 }

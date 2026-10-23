@@ -1,5 +1,181 @@
 # Project History
 
+## 2026-10-23 — Publish SpotLED Suite v0.19.7
+
+- Bumped Android to versionCode 31/versionName 0.19.7. Built and verified the
+  contributor APK (APK Signature Scheme v2; local Android debug signing
+  identity); SHA-256 is recorded in `android/README.md`.
+- Android release unit tests (44), `lintRelease`, and `assembleRelease` pass.
+  Python sender tests (63) and SpotLED-MQTT tests (38) pass. No iOS release was
+  built; iOS remains contributor-signed.
+- Scrubbed the public docs/history of machine-specific NOAA station, weather
+  reading, private LAN endpoint, and local phone-name details. The ignored local
+  MQTT `env.sh` was not staged.
+
+## 2026-10-23 — Reverse Portrait glyph direction
+
+- User reports Portrait letters still appeared reversed in the iPhone build and
+  requests trying the 270° rotation. Kept the two-choice Landscape/Portrait UI
+  and changed Portrait's per-glyph transform from 90° to 270° clockwise across
+  iOS, Android, and Python. Image rotation choices remain unchanged.
+- Python tests (63), Android JVM tests (44), lint and debug APK assembly pass;
+  iOS app and simulator test targets build. Rebuilt and reinstalled the iOS
+  development app on the paired iPhone. User confirms Portrait letters are now correct
+  on iOS with the 270° transform. Full-message scrolling and Android/Python
+  physical behavior remain unconfirmed.
+
+## 2026-10-23 — Simplify text orientation across all senders
+
+- Replaced the mobile Landscape/90°/270° text selector with Landscape and
+  Portrait. Portrait's glyph turn is a single implementation detail; image
+  rotation retains all four angles.
+- Migrated saved Android text selections (either prior portrait direction) and
+  iOS raw values to the single Portrait choice. Python now offers
+  `--text-orientation landscape|portrait`; `--rotation` is image-only. Its
+  Portrait WordStock rotates each existing 16×16 glyph and retains the full
+  CharacterString, preserving firmware marquee effects.
+- Python tests (63), Android JVM tests (44), lint and debug APK assembly pass.
+  iOS app and simulator test targets compile; simulator execution was not
+  repeated because XCTest's test-worker launch/cleanup has been unstable. The
+  iOS development build was installed on the paired iPhone; no SpotLED content was sent.
+
+## 2026-10-23 — Rotate portrait text within the fixed panel frame
+
+- Corrected the first portrait-text mapping after the user reported that the
+  display still looked landscape. The old 16×64 logical canvas mapped back to
+  64×16 wire order was intended for a physically sideways-mounted panel; it did
+  not make the lettering visibly rotate when viewed on a landscape panel.
+- Android and iOS now rasterize from the existing native-font 16×16 glyphs and
+  turn each glyph within its own 16-pixel cell. The complete message goes through
+  WordStock/CharacterString, preserving native scrolling effects; the preview is
+  the initial 64×16 viewport. Image-only Rotation/Fit remain independent. Updated
+  docs and the iOS UI test label accordingly.
+- Android JVM tests (44), `lintDebug`, and debug APK assembly pass. The iOS app
+  and simulator test targets build successfully. The latest focused simulator
+  test attempt stalled while XCTest was recovering a crashed test worker; it
+  produced no valid test results. Earlier 27-unit/one-UI-test passes were for
+  the superseded portrait algorithm. No display content was sent; physical
+  visual confirmation remains in TODO.md.
+- Built the same Debug version (0.19.6, build 30) with the user's existing
+  signing profile, installed it on the paired iPhone, and launched it.
+  This is a development install, not an iOS release; the SpotLED display was not
+  contacted.
+- Follow-up fix for the user's report that Scroll Left clipped the O in
+  “HELLO”: portrait text now sends rotated 16×16 font glyphs in the native
+  WordStock/CharacterString format, preserving the complete string and firmware
+  marquee effect. The 64×16 preview shows the initial viewport. Android's 44 JVM
+  tests, lint, and debug APK assembly pass; iOS app and test targets build. The
+  latest iOS development build was reinstalled on the paired iPhone. No display content
+  was sent; physical scrolling confirmation remains pending.
+
+## 2026-10-23 — Deploy current iOS development build
+
+- Built the current iOS app in Debug configuration from the existing local
+  Xcode project, using its installed development provisioning profile and
+  signing identity (version 0.19.6, build 30). Installed and launched bundle
+  `net.bugmag.spotledcompanion` on the connected iPhone;
+  `devicectl` confirmed the process running. This was a developer build, not an
+  archive or iOS release. No SpotLED content was sent.
+- The installation completed without creating or changing provisioning
+  profiles. Physical portrait-text and UI checks remain pending in TODO.md.
+
+## 2026-10-23 — Separate image transforms from text orientation
+
+- Moved Android/iOS image Rotation and Fit controls into their Image sections;
+  image settings no longer select raster/rotate/fit behavior for text. Text now
+  has its own Landscape, Portrait clockwise, and Portrait counterclockwise modes.
+- Portrait text is forced to raster, laid out and previewed in a logical 16×64
+  canvas, then mapped to 64×16 protocol order for a display mounted on its side.
+  Landscape Normal text continues to use the native font. Android JVM tests cover
+  both portrait mappings; iOS unit tests verify logical and wire dimensions.
+- Physical portrait mounting and both text directions remain for user validation.
+  Android JVM tests (44), lint/debug assembly and iOS simulator unit tests (27)
+  pass. One updated iOS UI-test run reported 1 pass for image/text independence
+  and portrait selection after taking about 130 seconds. A later retry failed
+  before test setup with `Timed out while requesting background assertion for
+  test process`; xcodebuild then remained waiting in `simCtlDiagnose` and left an
+  incomplete result bundle. Three macOS diagnostic reports identify Apple
+  `WidgetRenderer_Default` (not SpotLED Companion), terminated by the 10-second
+  `scene-create` watchdog while synchronously requesting IOSurface values via
+  CoreAnimation/RenderBox. Their timestamps overlap earlier test runs, but a
+  causal relationship to XCTest's background-assertion timeout is unproven.
+  The iOS unit-only run immediately afterward completed normally with a valid
+  result bundle (27/27). No image or text was sent to a physical display and no
+  release was built.
+- The initial portrait mapping described above was superseded on 2026-10-23:
+  the user clarified text itself must visibly rotate in the fixed landscape
+  frame. See the correction entry at the top of this history.
+
+- User confirms image regression testing passed and will notify the project if
+  bugs are found. Closed the Android image Preview/Send, mirrored-EXIF,
+  large-image and GIF-reporting validation entries in TODO.md. Portrait mounting,
+  capability-query and other non-image checks remain open.
+
+## 2026-10-19 — P2 cross-platform polish and queue/asset safeguards
+
+- Standardized GIF handling: decoder-composited frames are flattened against
+  black; samples span the animation with first/last endpoints; zero/missing frame
+  delays use 100 ms, delays are floored at 20 ms, and the total source-cycle
+  duration is divided by sent-frame count then clamped to 250–1,000 ms. Python
+  uses the live frame/packet limits; current mobile flows retain at most two
+  frames. Send/preview status reports original and sent frame counts and interval.
+  Added shared vectors used by Python, Android and iOS tests.
+- Documented area-average Python versus nearest-neighbor mobile resizing. Added
+  offline Python image inspection and dry-run packet sizing, `--version`, lazy
+  BLE imports, a Python 3.11+ installable package/development dependency recipe,
+  and an optional nonblocking same-host advisory lock. The lock cannot coordinate
+  phones or other hosts.
+- Split Android preview from sending and renamed iOS actions to reflect that
+  previews are already visible before send. Native preview copy explicitly says
+  it shows only the static initial viewport. Added iOS bundle version/build
+  labels, keyboard dismissal, VoiceOver-accessible Bluetooth guidance, and a
+  manual-controller handoff instruction in Android Settings.
+- Capped Python queues at 32 incoming events/16 pending alerts and Android's
+  executor backlog at 32/alert queue at 16. Logs/Android status notification
+  expose queue depth, drops and weather freshness; clock refresh requests remain
+  coalesced. Python test suite: 61 pass; MQTT suite: 38 pass; Android JVM suite:
+  44 pass, lint and debug assembly pass; iOS simulator unit suite: 26 pass.
+- Added the permissioned Wetter.ax GIFs as tracked canonical assets. SpotLED-MQTT
+  reads them directly and Gradle copies them into the APK at `preBuild`; the
+  assembled debug APK contains all 24 GIFs. Added an Android streaming GIF
+  metadata parser test against the canonical `cloudy.gif` (16 frames, 3.2 s).
+- Documented the owner-key migration and uninstall/update implications. No
+  signing key was created or backed up; that security action remains with the
+  owner. No app release, installation, BLE transmission, or physical display
+  validation was performed.
+- Final verification: Python 61/61, MQTT 38/38, Android JVM 44/44 with lint and
+  debug APK assembly, and iOS simulator unit tests 26/26 pass. The updated iOS
+  keyboard/rotation UI test reported 1 pass; Xcode hung during result-bundle
+  cleanup afterward, so its result bundle was incomplete. No hardware checks.
+
+## 2026-10-19 — P1 Android image import safety and responsiveness
+
+- Moved image/GIF file copying, decoding, orientation, transforms, and panel
+  rasterization to a cancellable single-thread worker. Request generations
+  prevent stale imports from replacing a newer preview; cancellation and Activity
+  teardown stop queued work.
+- Enforced a 50 MB encoded input cap, 4 MP still decode cap with power-of-two
+  sampling, and 4 MP GIF logical-canvas cap checked from the header before GIF
+  decode. Applied EXIF orientations 1–8, including horizontal/vertical mirrors,
+  transpose and transverse cases. Alpha is composited against black before RGB
+  output.
+- Added bounds and orientation-coordinate unit tests. Android JVM suite passes
+  (41 tests), `lintDebug` passes, and `git diff --check` is clean. No APK build,
+  install, or physical-display test was performed.
+
+## 2026-10-19 — P1 mobile live-capability preflight
+
+- Added read-only Android/iOS BLE queries for screen dimensions and color
+  format, animation frame capacity, and receive-buffer size before sending.
+  Both apps now refuse unsupported RGB dimensions/formats, excessive frame
+  counts, and payloads exceeding the device's reported receive limit before
+  changing display content; native text checks both payloads against the live
+  limit before text setup commands.
+- Android JVM tests pass (40). All 25 iOS simulator unit tests pass, including
+  response parsing/serial matching and boundary rejection. The Xcode UI-test
+  runner terminated while preparing to launch; physical display query behavior
+  has not yet been validated. No content was sent and no app release was built.
+
 ## 2026-10-19 — P0 reliability implementation
 
 - Coalesced queued `CLOCK_REFRESH` dirty events through one event-loop token and
@@ -36,13 +212,80 @@
   test-target compilation succeed; simulator test execution remains inconclusive
   due Xcode session cleanup. Updated development build installed and launched on
   iPhone. No SpotLED content was sent and no iOS release was created.
-- Still open: iOS BLE failure-injection tests for late callbacks, cancellation,
-  power-off, disconnect/write races and successful reuse on the next send.
+- At implementation time, iOS BLE failure-injection tests for late callbacks,
+  cancellation, power-off, disconnect/write races and successful reuse remained
+  open; see the completed test coverage below.
 - User reports all manual iPhone validation checks passed: normal send, saved
   display/pending-send behavior, unavailable-display timeout and recovery,
   cancellation, and Bluetooth/background interruption cleanup. Automated
   simulator failure-injection coverage for stale callbacks and race conditions
-  remains open; no iOS release was built.
+  was still open at that point; no iOS release was built.
+- Corrected an iOS protocol-test expectation for the timing object's encoded
+  bytes. Ran the Xcode test action on the iPhone 18 Pro / iOS 27.2 simulator;
+  all eight protocol/payload tests passed. This does not cover BLE manager
+  failure injection, which remains open above.
+- Added a session-scoped BLE wait/queue coordinator used by SpotLedBLEManager and
+  simulator tests with injected timeout, stale-session callback, mid-chunk
+  disconnect, explicit/background cancel, Bluetooth-off, and subsequent-success
+  scenarios. All 15 iOS simulator tests passed on iPhone 18 Pro / iOS 27.2. These
+  are deterministic state/transfer tests, not physical BLE hardware tests; no
+  iOS release was built.
+- [x] Add iOS simulator failure-injection tests for readiness/ack timeout, stale
+  callbacks, disconnect during chunk writes, explicit/background cancellation,
+  Bluetooth power-off, and a successful subsequent transfer.
+- Cancel obsolete iOS photo-load and image/GIF decode tasks when a new selection,
+  rotation/fit change, or view dismissal supersedes them. Add cancellation
+  checkpoints before decoding, between sampled frames, after thumbnail creation,
+  and while copying decoded rows. Keep generation checks to prevent stale results
+  from replacing the current preview. All 18 iOS simulator tests pass.
+- [x] Cancel obsolete iOS image-decoding tasks instead of only discarding results;
+  verify task replacement, separate load/decode cancellation, and rasterizer
+  cancellation on the simulator.
+- Move iOS Rotation and Fit into an “Orientation & fit” section above Text and
+  Image, clarifying the shared settings apply to both content types. Added an
+  iPhone 18 Pro simulator UI test that changes rotation to 90° and confirms the
+  native-text-to-raster guidance updates. All 19 simulator tests pass.
+- [x] Put rotation/fit controls in a clearly shared section and test their
+  rotation effect in the iOS simulator.
+- [x] Obtain completed Xcode CLI simulator test runs after allowing simulator
+  startup; the latest iPhone 18 Pro / iOS 27.2 run passed all 19 unit and UI tests.
+- Added the shared language-neutral vector file
+  `test_fixtures/spotled_protocol_vectors.json` for 0°/90°/180°/270° RGB
+  transforms, native I/W/N glyph objects, and the complete packet length, prefix,
+  and SHA-256 of a black 64×16 frame. Python (52 tests), Android JVM unit tests,
+  and iOS simulator (22 tests) all consume and pass against these same vectors.
+- [x] Add shared packet/font/transform fixtures and automated Python/JVM/Swift
+  checks for the covered byte-level behavior.
+- Consolidated the shared 3×5 compact glyphs and captured native 16×16 glyph
+  overrides in `glyph_data/spotled_glyphs.json`; generated Python, Android Java,
+  and Swift tables with `tools/generate_glyph_tables.py`. Added a stale-output
+  check plus canonical-source comparisons in all platform suites. Python (53
+  tests), Android JVM unit tests, and iOS simulator (23 tests) pass.
+- [x] Generate compact and captured glyph tables/overrides for Python, Android,
+  and iOS from one canonical source.
+- Aligned native fallback behavior: all platforms now scale the shared compact
+  3×5 glyph to a 16×16 FontObject for uncaptured BMP characters, preserve the
+  original BMP codepoint in FontObject and CharacterString, and reject non-BMP
+  native text instead of truncating or silently changing it. Added shared
+  `é` fallback/codepoint vectors and cross-platform rejection tests. Python (55
+  tests), Android JVM unit tests, and iOS simulator (24 tests) pass.
+- [x] Align native fallback glyph and Unicode/codepoint policy across Python,
+  Android, and iOS.
+- The iOS text form now displays live native WordStock and CharacterString byte
+  sizes against the 7,280-byte per-payload cap, plus the effective 154-character
+  native limit. Raster text reports its fixed 3,126-byte RGB frame size. Native
+  sends are disabled when the encoded packet limit or BMP policy is exceeded.
+  Added 154/155-character protocol boundary tests and an iOS UI test for native
+  versus raster byte guidance; all 25 simulator tests pass.
+- [x] Show effective encoded-byte text limits and the current per-transfer sizes
+  in the iOS text UI.
+- Python now builds both WordStock and CharacterString payloads before connecting,
+  and checks both against the live receive capacity after read-only capability
+  queries but before setup or font upload. Invalid Unicode is rejected before
+  BLE connection; an oversized font payload causes no display writes. All 57
+  Python protocol tests pass.
+- [x] Validate both Python native payloads before display-changing setup and
+  uploads.
 
 ## Backlog correction — 2026-10-19
 
@@ -169,13 +412,13 @@ reconciliation.
 - Fixed the post-animation fallback seen in the Android NOAA video: before sending a sampled Wetter animation, Android now writes its first fully composed moon/weather frame as the persistent scene, so the display returns to those icons after playback instead of the earlier small ClockTemp raster glyph. Applied the same persistent-base ordering to SpotLED-MQTT for consistent behavior. Added a regression test for static-frame-before-animation send order. Published Android v0.19.1 (versionCode 25); physical validation of the Android fix remains pending. The Mac bridge was not restarted.
 - Released Android v0.19.0 (versionCode 24) and matching Mac SpotLED-MQTT animation: use the 8×8 Wetter.ax GIF assets, choose the moon icon using Wetter.ax's date calculation, stack moon above the bottom-justified condition icon, and select the most visually distinct condition frames for a two-frame 500 ms animation. The Home Assistant speed bar stops before the icon column. The user confirmed reuse permission; Hank the Tank is credited in Android About and the project docs. This host's GIFs remain Git-ignored but are included in the release APK; clones without those local assets retain the static fallback. Python tests pass (48 sender, 25 MQTT); Android tests and lint pass (32 tests). The APK is installed on the Pixel; the phone foreground status service remains off while Mac is active. The Mac HA service was restarted and acknowledged two-frame/500 ms status transfers; the user visually confirmed the animation on the SpotLED. Android-specific visual validation remains pending.
 - Exported 16 named Home Assistant weather-condition GIF previews in `SpotLED-MQTT/`, using the MQTT renderer's exact 5×5 icon pixels enlarged with nearest-neighbor scaling. Added a `.gitignore` pattern so the local GIFs remain out of version control.
-- Documented the SpotLED-MQTT NOAA/NWS source as implemented but untested, then configured ignored `SpotLED-MQTT/env.sh` for ClockTemp002's KSQL station and started the Mac service with `--weather-source noaa`. The broker connected and accepted the startup observation. The user visually confirmed the KSQL status display and temperature difference between San Carlos and Loma Mar; NOAA display validation is complete, and the service remains running.
+- Documented the SpotLED-MQTT NOAA/NWS source as implemented but untested, then configured ignored `SpotLED-MQTT/env.sh` for a NOAA station and started the Mac service with `--weather-source noaa`. The broker connected and accepted the startup observation. The user visually confirmed the NOAA status display; station and location-specific readings are intentionally omitted from this public log.
 - Re-exported 16 local NOAA/HA condition GIF previews from the 8×8 AWTRIX icon assets referenced by `Wetter.ax`, stacking the date-calculated moon phase above the bottom-justified weather icon in a 64×16 black frame. Preserved weather-icon animations and added eight standalone moon-phase previews. Kept all GIFs Git-ignored; the running MQTT renderer was not changed or restarted.
 - User confirmed the Mac SpotLED-MQTT service is running as expected with the ClockTemp002 Home Assistant settings. The Home Assistant weather/speed path and ClockTemp-style display are validated; the service remains running.
 - Added Android v0.18.0 (versionCode 23): opt-in phone-notification forwarding through the existing foreground display service, app-level allowlist, Scroll alerts, self-notification/ongoing-notification filtering, and a clear disclosure that selected notification text is sent to the SpotLED. The app checks Notification Access and opens Android's special-access Settings page; existing Bluetooth and persistent-notification runtime permission checks remain in the service-start path. All 30 JVM tests, the signed release build, and lint pass. Installed on the Pixel 6a; the launcher-app allowlist is populated, the Android Notification Access screen lists Companion, and the user tested and confirmed notification forwarding. The user's Home Assistant display service was restarted after installation.
 - User confirmed Android Companion MQTT notifications now display after correcting the broker TLS setting: the broker uses plain MQTT on port 1883, so TLS must be off for that connection. This resolves the earlier connection failure; weather and clock display validation remain separate.
-- Follow-up Android v0.17.1 (versionCode 21): accepts a host-only TC001 address and expands it to `/api/v1/device`; separates MQTT retries from HTTP polling so broker failures cannot starve NOAA or indoor-temperature updates; adds detailed status diagnostics and readable, labeled, wrapping settings fields in a height-bounded scroll area. Release tests and lint pass (29 JVM tests). Settings were visually checked on the Pixel; the TC001 field contained only `192.168.8.99`, while direct access to `http://192.168.8.99/api/v1/device` returned a valid temperature and NOAA station `KSQL` returned a valid `Clear` observation. Applying the existing enabled configuration produced a normal clock/weather transfer acknowledgment; no test pattern was sent. Later package replacement stopped the service.
-- Follow-up Android v0.17.2 (versionCode 22): checked the app's runtime network status before attempting to start the status service, and added a Settings deep link when Android has denied network access. Android Settings on the Pixel showed the app's Network permission as “Don't allow”; package diagnostics showed `INTERNET` denied, and app socket attempts failed with `EPERM`. This explains both blank temperatures and MQTT failure. The TC001 URL normalization and NOAA/HTTP worker isolation are in place; NOAA station `KSQL` returned a valid observation at its latest report. The phone is left on the Network permission screen for the user to allow it. The status service is off and no further display frame was sent during the final diagnostic step.
+- Follow-up Android v0.17.1 (versionCode 21): accepts a host-only TC001 address and expands it to `/api/v1/device`; separates MQTT retries from HTTP polling so broker failures cannot starve NOAA or indoor-temperature updates; adds detailed status diagnostics and readable, labeled, wrapping settings fields in a height-bounded scroll area. Release tests and lint pass (29 JVM tests). Settings were visually checked on the Pixel; a private test endpoint returned a valid temperature and NOAA returned a valid observation. Applying the existing enabled configuration produced a normal clock/weather transfer acknowledgment; no test pattern was sent. Later package replacement stopped the service.
+- Follow-up Android v0.17.2 (versionCode 22): checked the app's runtime network status before attempting to start the status service, and added a Settings deep link when Android has denied network access. Android Settings on the Pixel showed the app's Network permission as “Don't allow”; package diagnostics showed `INTERNET` denied, and app socket attempts failed with `EPERM`. This explains both blank temperatures and MQTT failure. The TC001 URL normalization and NOAA/HTTP worker isolation are in place; a configured NOAA station returned a valid observation. The phone is left on the Network permission screen for the user to allow it. The status service is off and no further display frame was sent during the final diagnostic step.
 - Added unreleased Android v0.17.0 (versionCode 20) with a user-controlled foreground service for ClockTemp-style time/weather and AWTRIX MQTT alerts. It supports NOAA/NWS latest station observations, Home Assistant retained weather and speed topics, optional TC001 indoor temperature, a Home Assistant-only speed bar, a persistent notification with Stop action, and protection against manual BLE-send contention. NOAA clock/weather can run with MQTT entirely blank; Home Assistant requires its broker and weather topic, and AWTRIX alert topic is optional. NOAA source credit is in the README, not on the LED. This Android-only feature is explicitly excluded from the planned iOS app scope. The release build, lint, and 28 JVM tests pass. The updated test APK was installed/launched on the Pixel 6a; the foreground service remains off and no LED content was sent.
 - Updated the MQTT bridge to mirror ClockTemp002 with an RGB-raster clock/status frame, a bitmap-drawn weather condition icon, and a once-per-minute clock/indoor-temperature refresh. Added NOAA/NWS latest-station observations, selected at launch with `--weather-source noaa` and configured by `NOAA_WEATHER_STATION`, or retained Home Assistant weather via `--weather-source homeassistant`. The Home Assistant source alone enables the speed-topic subscription and bar. NOAA source credit is documented in the MQTT README, not on the display. MQTT alerts remain enabled with Scroll as the default. All 47 Python sender tests and 21 MQTT tests pass; the already-running service is still the older process and must be restarted with a selected source to use these changes.
 
@@ -408,7 +651,7 @@ See the reconciliation notes above for current source evidence and corrections.
 - [x] Make MQTT alerts use the explicit Scroll effect (mode 6) by default for a more prominent visual alert; retain configurable effects and alert lifecycle.
 - [x] Add `--weather-source noaa|homeassistant`; NOAA reads its station from `NOAA_WEATHER_STATION`, while Home Assistant uses retained `MQTT_WEATHER_TOPIC` updates.
 - [x] Keep the speed bar enabled only with the Home Assistant source; NOAA mode omits it.
-- [x] User visually confirmed the KSQL NOAA status frame on the SpotLED and the temperature difference between San Carlos and Loma Mar.
+- [x] User visually confirmed a NOAA status frame on the SpotLED. Station-specific values are intentionally omitted from this public history.
 - [x] User confirmed the Mac MQTT service works with the ClockTemp002 Home Assistant weather/speed settings and ClockTemp-style display.
 - [x] Scrub machine-specific broker/topic/device/readout values from GitHub-facing documentation and require MQTT/device settings through environment variables.
 - [x] Keep SpotLED-MQTT manually started to avoid contention with the companion app; do not configure auto-start.

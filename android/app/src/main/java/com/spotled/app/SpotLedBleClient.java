@@ -329,15 +329,21 @@ final class SpotLedBleClient {
     }
 
     void sendNativeText(String text, int paletteIndex, int effectMode, int timeMs) {
-        sendNativeTextInternal(text, paletteIndex, null, effectMode, timeMs);
+        sendNativeTextInternal(text, paletteIndex, null, effectMode, timeMs, 0);
+    }
+
+    void sendRotatedNativeText(String text, int paletteIndex, int effectMode,
+                               int timeMs, int glyphRotationDegrees) {
+        sendNativeTextInternal(text, paletteIndex, null, effectMode, timeMs,
+                glyphRotationDegrees);
     }
 
     void sendNativeTextSolidColor(String text, int argb, int effectMode, int timeMs) {
-        sendNativeTextInternal(text, 0, argb, effectMode, timeMs);
+        sendNativeTextInternal(text, 0, argb, effectMode, timeMs, 0);
     }
 
     private void sendNativeTextInternal(String text, int paletteIndex, Integer solidColor,
-                                        int effectMode, int timeMs) {
+                                        int effectMode, int timeMs, int glyphRotationDegrees) {
         FoundDevice target = selectedDevice;
         if (target == null) {
             status("Find and select a SpotLED display before sending.");
@@ -351,10 +357,15 @@ final class SpotLedBleClient {
         new Thread(() -> {
             boolean transferAcknowledged = false;
             try {
-                byte[][] payloads = solidColor == null
+                byte[][] payloads = solidColor == null && glyphRotationDegrees != 0
+                        ? SpotLedProtocol.buildRotatedNativeTextTransfers(text, paletteIndex,
+                                effectMode, timeMs, glyphRotationDegrees)
+                        : solidColor == null
                         ? SpotLedProtocol.buildNativeTextTransfers(text, paletteIndex, effectMode, timeMs)
                         : SpotLedProtocol.buildNativeTextTransfersSolidColor(text, solidColor, effectMode, timeMs);
                 connectForTransfer(target);
+                SpotLedProtocol.Capabilities capabilities = queryCapabilities();
+                SpotLedProtocol.validateNativeText(capabilities, payloads);
                 writeCommand(SpotLedProtocol.buildNativeTextSetupPlaylist());
                 Thread.sleep(200);
                 writeCommand(SpotLedProtocol.buildNativeTextSetupPixelMap());
@@ -390,9 +401,9 @@ final class SpotLedBleClient {
             try {
                 byte[] payload = SpotLedProtocol.buildRgbAnimation(
                         frames, width, height, intervalMs, effectMode);
-                if (payload.length > 7280)
-                    throw new IllegalArgumentException("Image animation exceeds the display's 7,280-byte receive limit.");
                 connectForTransfer(target);
+                SpotLedProtocol.Capabilities capabilities = queryCapabilities();
+                SpotLedProtocol.validateRgb(capabilities, width, height, frames.length, payload.length);
                 transferPayload(payload);
                 transferAcknowledged = true;
             } catch (Exception exception) {
@@ -425,6 +436,37 @@ final class SpotLedBleClient {
         }
         writeCommand(SpotLedProtocol.buildEnd(serial, SpotLedProtocol.SET_DATA_OBJECT, payload.length));
         waitForAck(4, serial, 12);
+    }
+
+    private SpotLedProtocol.Capabilities queryCapabilities() throws Exception {
+        int screenSerial = nextQuerySerial();
+        byte[] screen = queryResponse(0x12, 0x13, screenSerial, 14, 6);
+        int animationSerial = nextQuerySerial();
+        byte[] animation = queryResponse(0x1a, 0x1b, animationSerial, 9, 6);
+        int capacitySerial = nextQuerySerial();
+        byte[] capacity = queryResponse(0x14, 0x15, capacitySerial, 9, 6);
+        return SpotLedProtocol.parseCapabilities(screen, animation, capacity,
+                screenSerial, animationSerial, capacitySerial);
+    }
+
+    private int nextQuerySerial() {
+        return nextSerial.getAndUpdate(value -> (value + 1) & 0xffff);
+    }
+
+    private byte[] queryResponse(int queryId, int responseId, int serial, int minLength,
+                                 int timeoutSeconds) throws Exception {
+        responses.clear();
+        writeCommand(SpotLedProtocol.buildQuery(queryId, serial));
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        while (System.nanoTime() < deadline) {
+            byte[] response = responses.poll(250, TimeUnit.MILLISECONDS);
+            if (response == null || response.length < minLength
+                    || (response[0] & 0xff) != response.length
+                    || (response[1] & 0xff) != responseId
+                    || (((response[2] & 0xff) << 8) | (response[3] & 0xff)) != serial) continue;
+            return response;
+        }
+        throw new IllegalStateException("Timed out reading display capabilities; no content was sent.");
     }
 
     private void connectForTransfer(FoundDevice target) throws Exception {

@@ -1,0 +1,4 @@
+# Direct Python dependency versions used for the verified local test run.
+bleak==3.0.2
+Pillow==13.0.0
+paho-mqtt==2.1.0

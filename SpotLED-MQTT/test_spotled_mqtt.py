@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 import tempfile
 import unittest
 import sys
@@ -12,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from spotled_mqtt import (
     CLOCK_REFRESH,
     CLOCK_REFRESH_COALESCE_SECONDS,
+    MAX_PENDING_ALERTS,
     Notification,
     SpotLedMqttService,
     Weather,
@@ -271,6 +273,33 @@ class PayloadTests(unittest.TestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await worker
             self.assertEqual(calls, 1)
+
+        asyncio.run(exercise())
+
+    def test_pending_alerts_are_bounded_and_metrics_include_weather_freshness(self):
+        service = SpotLedMqttService(weather_source="noaa")
+        pending = deque()
+        for index in range(MAX_PENDING_ALERTS + 4):
+            service._queue_pending(pending, Notification(str(index), (255, 255, 255), 1000))
+        service._queue_pending(pending, CLOCK_REFRESH)
+        service._queue_pending(pending, CLOCK_REFRESH)
+        self.assertEqual(sum(isinstance(item, Notification) for item in pending), MAX_PENDING_ALERTS)
+        self.assertEqual(sum(item is CLOCK_REFRESH for item in pending), 1)
+        self.assertEqual(service.dropped_pending_alerts, 4)
+        service._set_latest_weather(Weather(65, "sunny"))
+        self.assertIn("weather_age=0s", service._queue_metrics())
+        self.assertIn("dropped=4", service._queue_metrics())
+
+    def test_overflowing_display_event_queue_is_bounded_and_counted(self):
+        async def exercise():
+            service = SpotLedMqttService(weather_source="noaa")
+            service.loop = asyncio.get_running_loop()
+            service.queue = asyncio.Queue(maxsize=1)
+            service._threadsafe_enqueue(Notification("first", (255, 255, 255), 1000))
+            service._threadsafe_enqueue(Notification("dropped", (255, 255, 255), 1000))
+            await asyncio.sleep(0)
+            self.assertEqual(service.queue.qsize(), 1)
+            self.assertEqual(service.dropped_queue_events, 1)
 
         asyncio.run(exercise())
 

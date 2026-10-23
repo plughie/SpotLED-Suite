@@ -1,93 +1,19 @@
 package com.spotled.app;
 
-import java.util.HashMap;
-import java.util.Map;
-
-/** The same independently authored 3x5 glyphs and spacing as the Python reference. */
+/** Compact raster text renderer backed by generated shared 3x5 glyphs. */
 final class CompactTextRaster {
-    private static final Map<Character, String[]> GLYPHS = new HashMap<>();
-
-    static {
-        glyph('A', "010", "101", "111", "101", "101");
-        glyph('B', "110", "101", "110", "101", "110");
-        glyph('C', "011", "100", "100", "100", "011");
-        glyph('D', "110", "101", "101", "101", "110");
-        glyph('E', "111", "100", "110", "100", "111");
-        glyph('F', "111", "100", "110", "100", "100");
-        glyph('G', "011", "100", "101", "101", "011");
-        glyph('H', "101", "101", "111", "101", "101");
-        glyph('I', "111", "010", "010", "010", "111");
-        glyph('J', "001", "001", "001", "101", "010");
-        glyph('K', "101", "101", "110", "101", "101");
-        glyph('L', "100", "100", "100", "100", "111");
-        glyph('M', "101", "111", "111", "101", "101");
-        glyph('N', "101", "111", "111", "111", "101");
-        glyph('O', "010", "101", "101", "101", "010");
-        glyph('P', "110", "101", "110", "100", "100");
-        glyph('Q', "010", "101", "101", "011", "001");
-        glyph('R', "110", "101", "110", "101", "101");
-        glyph('S', "011", "100", "010", "001", "110");
-        glyph('T', "111", "010", "010", "010", "010");
-        glyph('U', "101", "101", "101", "101", "111");
-        glyph('V', "101", "101", "101", "101", "010");
-        glyph('W', "101", "101", "111", "111", "101");
-        glyph('X', "101", "101", "010", "101", "101");
-        glyph('Y', "101", "101", "010", "010", "010");
-        glyph('Z', "111", "001", "010", "100", "111");
-        glyph('0', "111", "101", "101", "101", "111");
-        glyph('1', "010", "110", "010", "010", "111");
-        glyph('2', "110", "001", "010", "100", "111");
-        glyph('3', "110", "001", "010", "001", "110");
-        glyph('4', "101", "101", "111", "001", "001");
-        glyph('5', "111", "100", "110", "001", "110");
-        glyph('6', "011", "100", "110", "101", "010");
-        glyph('7', "111", "001", "010", "010", "010");
-        glyph('8', "010", "101", "010", "101", "010");
-        glyph('9', "010", "101", "011", "001", "110");
-        glyph(' ', "000", "000", "000", "000", "000");
-        glyph('!', "010", "010", "010", "000", "010");
-        glyph('"', "101", "101", "000", "000", "000");
-        glyph('#', "101", "111", "101", "111", "101");
-        glyph('$', "011", "110", "011", "110", "110");
-        glyph('%', "101", "001", "010", "100", "101");
-        glyph('&', "010", "101", "010", "101", "011");
-        glyph('\'', "010", "010", "000", "000", "000");
-        glyph('(', "001", "010", "010", "010", "001");
-        glyph(')', "100", "010", "010", "010", "100");
-        glyph('*', "000", "101", "010", "101", "000");
-        glyph('+', "000", "010", "111", "010", "000");
-        glyph(',', "000", "000", "000", "010", "100");
-        glyph('-', "000", "000", "111", "000", "000");
-        glyph('.', "000", "000", "000", "000", "010");
-        glyph('/', "001", "001", "010", "100", "100");
-        glyph(':', "000", "010", "000", "010", "000");
-        glyph(';', "000", "010", "000", "010", "100");
-        glyph('<', "001", "010", "100", "010", "001");
-        glyph('=', "000", "111", "000", "111", "000");
-        glyph('>', "100", "010", "001", "010", "100");
-        glyph('?', "110", "001", "010", "000", "010");
-        glyph('@', "010", "101", "111", "100", "011");
-        glyph('[', "011", "010", "010", "010", "011");
-        glyph('\\', "100", "100", "010", "001", "001");
-        glyph(']', "110", "010", "010", "010", "110");
-        glyph('^', "010", "101", "000", "000", "000");
-        glyph('_', "000", "000", "000", "000", "111");
-        glyph('`', "100", "010", "000", "000", "000");
-        glyph('{', "001", "010", "110", "010", "001");
-        glyph('|', "010", "010", "010", "010", "010");
-        glyph('}', "100", "010", "011", "010", "100");
-        glyph('~', "000", "010", "101", "000", "000");
+    static final class PanelFrames {
+        final RgbTransforms.Frame preview;
+        final RgbTransforms.Frame wire;
+        PanelFrames(RgbTransforms.Frame preview, RgbTransforms.Frame wire) {
+            this.preview = preview; this.wire = wire;
+        }
     }
 
     private CompactTextRaster() {}
 
-    private static void glyph(char ch, String... rows) { GLYPHS.put(ch, rows); }
-
     static String[] rowsFor(int codePoint) {
-        char normalized = codePoint >= 0 && codePoint < 128
-                ? Character.toUpperCase((char) codePoint) : '?';
-        String[] rows = GLYPHS.get(normalized);
-        return rows == null ? GLYPHS.get('?') : rows;
+        return GeneratedGlyphs.compactRowsFor(codePoint);
     }
 
     static RgbTransforms.Frame render(String text, int paletteIndex) {
@@ -113,5 +39,43 @@ final class CompactTextRaster {
             }
         }
         return new RgbTransforms.Frame(width, 5, rgb);
+    }
+
+    static PanelFrames renderForPanel(String text, int paletteIndex, int orientationDegrees) {
+        if (text == null || text.isEmpty()) throw new IllegalArgumentException("Text must not be empty");
+        if (orientationDegrees != 0 && orientationDegrees != 90 && orientationDegrees != 270)
+            throw new IllegalArgumentException("Text orientation must be 0, 90, or 270 degrees");
+        if (orientationDegrees != 0) return renderRotatedNativePreview(text, paletteIndex, orientationDegrees);
+        RgbTransforms.Frame source = render(text, paletteIndex);
+        RgbTransforms.Frame panel = RgbTransforms.fit(source.rgb, source.width,
+                source.height, SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT, "contain");
+        return new PanelFrames(panel, panel);
+    }
+
+    private static PanelFrames renderRotatedNativePreview(String text, int paletteIndex,
+                                                           int orientationDegrees) {
+        int[] codePoints = text.codePoints().toArray();
+        byte[] pixels = new byte[SpotLedProtocol.SCREEN_WIDTH
+                * SpotLedProtocol.SCREEN_HEIGHT * 3];
+        for (int index = 0; index < codePoints.length; index++) {
+            int xStart = index * 16;
+            if (xStart >= SpotLedProtocol.SCREEN_WIDTH) break;
+            byte[] glyph = SpotLedProtocol.rotatedFontObject((char) codePoints[index], orientationDegrees);
+            int color = TextPalette.colorFor(paletteIndex, index, codePoints.length);
+            for (int y = 0; y < 16; y++) {
+                int rowOffset = 14 + y * 2;
+                int bits = ((glyph[rowOffset] & 0xff) << 8) | (glyph[rowOffset + 1] & 0xff);
+                for (int x = 0; x < 16 && xStart + x < SpotLedProtocol.SCREEN_WIDTH; x++) {
+                    if ((bits & (0x8000 >>> x)) == 0) continue;
+                    int offset = (y * SpotLedProtocol.SCREEN_WIDTH + xStart + x) * 3;
+                    pixels[offset] = (byte) (color >> 16);
+                    pixels[offset + 1] = (byte) (color >> 8);
+                    pixels[offset + 2] = (byte) color;
+                }
+            }
+        }
+        RgbTransforms.Frame panel = new RgbTransforms.Frame(SpotLedProtocol.SCREEN_WIDTH,
+                SpotLedProtocol.SCREEN_HEIGHT, pixels);
+        return new PanelFrames(panel, panel);
     }
 }

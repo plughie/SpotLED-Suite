@@ -1,15 +1,74 @@
 """Offline regression checks for the reconstructed SPOTLED wire format."""
 
 import sys
+import hashlib
+import json
+import subprocess
+import tempfile
 import unittest
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from spotled_common.font3x5 import FONT3X5
 from spotled_common import sender as spotled
+from spotled_common.ble_lock import ble_process_lock
+
+SHARED_FIXTURES = json.loads(
+    (Path(__file__).parent / "test_fixtures" / "spotled_protocol_vectors.json").read_text()
+)
+SHARED_GLYPH_DATA = json.loads(
+    (Path(__file__).parent / "glyph_data" / "spotled_glyphs.json").read_text()
+)
+SHARED_GIF_VECTORS = json.loads(
+    (Path(__file__).parent / "test_fixtures" / "gif_processing_vectors.json").read_text()
+)
+
+
+class PureProtocolTests(unittest.TestCase):
+    """Focused protocol/font/GIF rules are runnable without importing BLE drivers."""
+
+    def test_image_and_gif_contract_vectors(self):
+        for vector in SHARED_GIF_VECTORS["cases"]:
+            self.assertEqual(
+                spotled.select_frame_indices(vector["source_frames"], vector["limit"]),
+                vector["indices"],
+            )
+            self.assertEqual(
+                spotled.animation_interval_ms(vector["duration_ms"], len(vector["indices"])),
+                vector["interval_ms"],
+            )
 
 
 class CliTests(unittest.TestCase):
+    def test_offline_cli_modes_parse_without_device_selection(self):
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "--image", "a.gif", "--inspect"]):
+            self.assertTrue(spotled.parse_cli_args().inspect)
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "--image", "a.gif", "--dry-run"]):
+            self.assertTrue(spotled.parse_cli_args().dry_run)
+
+    def test_sender_protocol_import_does_not_require_bleak(self):
+        code = (
+            "import builtins; old=builtins.__import__; "
+            "builtins.__import__=lambda name,*a,**k: (_ for _ in ()).throw(ImportError()) "
+            "if name == 'bleak' else old(name,*a,**k); "
+            "import spotled_common.sender as s; "
+            "assert len(s.build_rgb_frame(1,1,b'\\0\\0\\0')) > 0"
+        )
+        result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).parent,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_optional_ble_lock_is_nonblocking_and_same_host_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = str(Path(directory) / "spotled.lock")
+            with patch.dict("os.environ", {"SPOTLED_LOCK_FILE": lock_path}):
+                with ble_process_lock():
+                    with self.assertRaisesRegex(RuntimeError, "Another SpotLED sender"):
+                        with ble_process_lock():
+                            pass
+
     def test_device_name_defaults_to_spotled_prefix_and_can_be_overridden(self):
         with patch.object(sys, "argv", ["SPOTLED-v3.py", "HELLO"]):
             self.assertEqual(spotled.parse_cli_args().device_name, "SpotLED_*")
@@ -17,6 +76,18 @@ class CliTests(unittest.TestCase):
             "SPOTLED-v3.py", "--image", "art.gif", "--device-name", "MySpotLED"
         ]):
             self.assertEqual(spotled.parse_cli_args().device_name, "MySpotLED")
+
+    def test_text_orientation_is_landscape_or_portrait_and_rotation_is_image_only(self):
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "HELLO", "--text-orientation", "portrait"]):
+            self.assertEqual(spotled.parse_cli_args().text_orientation, "portrait")
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "HELLO", "--text-orientation", "270"]):
+            with self.assertRaises(SystemExit):
+                spotled.parse_cli_args()
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "--image", "a.png", "--rotation", "270"]):
+            self.assertEqual(spotled.parse_cli_args().rotation, 270)
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "HELLO", "--rotation", "270"]):
+            with self.assertRaises(SystemExit):
+                spotled.parse_cli_args()
 
     def test_raster_font_is_explicit_so_native_text_stays_the_default(self):
         with patch.object(sys, "argv", ["SPOTLED-v3.py", "HYBRID"]):
@@ -84,6 +155,61 @@ class TextModeDispatchTests(unittest.IsolatedAsyncioTestCase):
             "A", "red", 0, "contain", raster_font="3x5", text_layout="whole",
             device_name="SpotLED_AB12", mode=3, frame_time_ms=100,
         )
+
+
+class NativeTextPreflightTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_unicode_fails_before_connecting(self):
+        connected = []
+
+        @asynccontextmanager
+        async def fake_connection(*args, **kwargs):
+            connected.append(True)
+            yield object()
+
+        with patch.object(spotled, "connected_device", new=fake_connection):
+            with self.assertRaisesRegex(ValueError, "BMP characters only"):
+                await spotled.main("🦆")
+        self.assertEqual(connected, [])
+
+    async def test_both_payloads_are_built_before_connect_and_oversize_stops_before_setup(self):
+        client = object()
+        events = []
+        original_font_builder = spotled.build_word_stock
+        original_text_builder = spotled.build_character_string
+
+        def build_font(text):
+            events.append("font")
+            return original_font_builder(text)
+
+        def build_text(text, *args, **kwargs):
+            events.append("text")
+            return original_text_builder(text, *args, **kwargs)
+
+        @asynccontextmanager
+        async def fake_connection(*args, **kwargs):
+            events.append("connect")
+            yield client
+
+        with patch.object(spotled, "build_word_stock", side_effect=build_font), \
+             patch.object(spotled, "build_character_string", side_effect=build_text), \
+             patch.object(spotled, "connected_device", new=fake_connection), \
+             patch.object(spotled, "send_query", new=AsyncMock()), \
+             patch.object(spotled, "query_screen_information",
+                          new=AsyncMock(return_value={"width": 64, "height": 16})), \
+             patch.object(spotled, "query_simple_response",
+                          new=AsyncMock(side_effect=[b"capabilities", b"capacity"])), \
+             patch.object(spotled, "parse_animation_capabilities_response",
+                          return_value={"max_text_characters": 160}), \
+             patch.object(spotled, "parse_receive_capacity_response", return_value=7280), \
+             patch("spotled_common.sender.asyncio.sleep", new=AsyncMock()), \
+             patch.object(spotled, "send_set", new=AsyncMock()) as setup_send, \
+             patch.object(spotled, "send_set_acknowledged", new=AsyncMock()) as content_send:
+            with self.assertRaisesRegex(ValueError, "Font transfer exceeds"):
+                await spotled.main("A" * 155)
+
+        self.assertEqual(events, ["font", "text", "connect"])
+        setup_send.assert_not_awaited()
+        content_send.assert_not_awaited()
 
 
 class ConnectionTests(unittest.IsolatedAsyncioTestCase):
@@ -240,6 +366,75 @@ class ObjectEncodingTests(unittest.TestCase):
         frame = spotled.build_query(0x10, 0)
         self.assertEqual(len(frame), frame[0])
         self.assertEqual(frame, bytes.fromhex("04100000"))
+
+    def test_shared_native_glyph_vectors_match_fixture(self):
+        captured = SHARED_GLYPH_DATA["captured_panel16_hex"]
+        compact = SHARED_GLYPH_DATA["compact_3x5"]
+        self.assertEqual(spotled.CAP_GLYPHS, captured)
+        self.assertEqual(FONT3X5, {key: tuple(rows) for key, rows in compact.items()})
+        for character_code, expected_hex in captured.items():
+            character = chr(int(character_code))
+            with self.subTest(character=character):
+                self.assertEqual(spotled.make_font_object(character).hex(), expected_hex)
+
+    def test_generated_glyph_tables_are_current(self):
+        result = subprocess.run(
+            [sys.executable, "tools/generate_glyph_tables.py", "--check"],
+            cwd=Path(__file__).parent, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_native_bmp_fallback_preserves_original_codepoint(self):
+        vector = SHARED_FIXTURES["native_text_unicode"]
+        character = chr(vector["bmp_fallback_codepoint"])
+        glyph = spotled.make_font_object(character)
+        question = spotled.make_font_object("?")
+        self.assertEqual(glyph.hex(), vector["glyph_object_hex"])
+        self.assertEqual(int.from_bytes(glyph[11:13], "big"), vector["bmp_fallback_codepoint"])
+        self.assertEqual(glyph[14:46], question[14:46])
+        text = spotled.build_character_string(character)
+        self.assertIn(bytes.fromhex(vector["character_text_object_hex"]), text)
+
+    def test_portrait_native_glyphs_rotate_clockwise_and_keep_all_wordstock_entries(self):
+        source = spotled.make_font_object("O")
+        rotated = spotled.rotate_font_object(source, 270)
+        self.assertEqual(len(rotated), 47)
+        self.assertEqual(rotated[11:13], source[11:13])
+        self.assertEqual(rotated[-1], spotled.check_sum(rotated[:-1]))
+        self.assertNotEqual(rotated[14:46], source[14:46])
+        word_stock = spotled.build_word_stock("HELLO", glyph_rotation=270)
+        fifth_glyph_offset = 9 + 4 * 47
+        self.assertEqual(word_stock[fifth_glyph_offset:fifth_glyph_offset + 47], rotated)
+        self.assertEqual(int.from_bytes(word_stock[6:8], "big"), 5)
+
+    def test_native_text_rejects_non_bmp_and_unpaired_surrogates(self):
+        for text in (SHARED_FIXTURES["native_text_unicode"]["non_bmp_example"], "\ud800"):
+            with self.subTest(text=repr(text)):
+                with self.assertRaisesRegex(ValueError, "BMP characters only"):
+                    spotled.build_character_string(text)
+                with self.assertRaisesRegex(ValueError, "BMP characters only"):
+                    spotled.build_word_stock(text)
+
+    def test_shared_rgb_frame_packet_matches_fixture_digest(self):
+        vector = SHARED_FIXTURES["black_frame_64x16_1000ms"]
+        previous_serial = spotled.serial_num
+        try:
+            spotled.serial_num = 1
+            frame = spotled.build_rgb_frame(
+                vector["width"], vector["height"],
+                bytes(vector["width"] * vector["height"] * 3),
+            )
+            animation = spotled.build_frame_animation(
+                [frame], frame_time_ms=vector["interval_ms"], mode=vector["effect_mode"]
+            )
+            packet = spotled.wrap_set_data(animation)
+        finally:
+            spotled.serial_num = previous_serial
+
+        self.assertEqual(len(packet), vector["payload_length"])
+        self.assertEqual(hashlib.sha256(packet).hexdigest(), vector["payload_sha256"])
+        self.assertEqual(packet[:len(bytes.fromhex(vector["payload_prefix_hex"]))].hex(),
+                         vector["payload_prefix_hex"])
 
     def test_parses_observed_device_screen_information(self):
         frame = bytes.fromhex("0e1300420000400010ff14640101")
@@ -441,6 +636,17 @@ class ObjectEncodingTests(unittest.TestCase):
         width, height, counterclockwise = spotled.rotate_rgb_pixels(2, 3, source, 270)
         self.assertEqual((width, height), (3, 2))
         self.assertEqual(counterclockwise, bytes(value for value in (2, 4, 6, 1, 3, 5) for _ in range(3)))
+
+    def test_shared_rgb_rotation_vectors_match_fixture(self):
+        vector = SHARED_FIXTURES["rotations_rgb"]
+        source = bytes.fromhex(vector["input_hex"])
+        for degrees, expected in vector["expected"].items():
+            with self.subTest(degrees=degrees):
+                width, height, pixels = spotled.rotate_rgb_pixels(
+                    vector["width"], vector["height"], source, int(degrees)
+                )
+                self.assertEqual((width, height), (expected["width"], expected["height"]))
+                self.assertEqual(pixels.hex(), expected["hex"])
 
     def test_rgb_rotation_rejects_invalid_angle(self):
         with self.assertRaises(ValueError):

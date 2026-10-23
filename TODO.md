@@ -7,58 +7,66 @@ feature still needs implementation.
 
 ## P0 — Reliability fixes
 
-- [ ] Add simulator failure-injection tests for iOS BLE timeout, stale callback,
-  disconnect during chunk writes, explicit/background cancellation, power-off,
-  and successful subsequent send. Session-scoped timers/callback guards,
-  continuation cleanup, and cancellation are implemented; simulator test
-  execution has not returned results.
+No open P0 items.
 
 ## P1 — Remaining foreground and protocol gaps
 
-- [ ] Move iOS rotation/fit out of the Image-only section into clearly shared
-  controls, or separate text/image transform state.
-- [ ] Resolve Xcode simulator test-session cleanup stalls and obtain a completed
-  test run.
-- [ ] Add shared language-neutral packet/font/transform fixtures and automated
-  Python/JVM/Swift checks so cross-platform encoding stays aligned.
-- [ ] Generate glyph tables/overrides from one source rather than copied tables.
-- [ ] Resolve remaining fallback differences: Python native 5×7 versus mobile
-  3×5, plus unsupported-BMP replacement/codepoint behavior.
-- [ ] Show effective encoded-byte text limits, not just character counts.
-- [ ] Move Python validation of both native payloads ahead of modifying setup
-  and the first font upload.
-- [ ] Add live capability queries to Android/iOS with safe handling of unsupported
-  dimensions, color formats and smaller receive buffers.
-- [ ] Cancel obsolete iOS image-decoding tasks, rather than only discarding their
-  results.
-- [ ] Move Android image decoding off the UI thread and audit source-size bounds
-  and EXIF/mirrored-orientation handling.
+- [x] Add live capability queries to Android/iOS with safe handling of unsupported
+  dimensions, color formats, frame counts, and smaller receive buffers. Protocol
+  validation passes on Android JVM and iOS simulator; physical BLE response
+  behavior still needs confirmation during normal use.
+- [x] Move Android image/GIF decoding and panel rasterization off the UI thread;
+  bound encoded files to 50 MB and decoded canvases to 4 MP, sample large stills
+  before decoding, and apply EXIF orientations including mirrored variants. 44
+  JVM tests and Android lint pass; physical image/GIF regression validation
+  remains in the pending-validation section.
 
 ## P2 — Enhancements and packaging
 
-- [ ] Define shared GIF sampling, disposal/transparency and timing rules across
-  platforms; report original/sent frame counts and timing changes.
-- [ ] Decide/document the Python area-average versus mobile nearest-neighbor
-  resampling policy.
-- [ ] Bound Python's pending-alert deque and Android's display executor backlog;
-  expose queue/drop counts and weather freshness. Python now coalesces bursts of
-  clock/weather/speed dirty events into one composed status refresh.
-- [ ] Add a clear manual-controller handoff and optional same-host process lock;
-  do not present a local lock as cross-phone ownership.
-- [ ] Add offline CLI dry-run/inspect and separate phone Preview/Send actions.
-- [ ] Label native phone previews as static viewports or implement a simulated
-  marquee without claiming firmware-exact playback.
-- [ ] Add iOS build identification and keyboard dismissal; improve accessibility
-  or permission guidance where validation finds gaps.
-- [ ] Align Python package/version diagnostics and tested dependency setup;
-  make pure protocol tests independent of BLE imports.
-- [ ] Create/back up an owner-controlled Android signing key with an explicit
-  migration plan for existing contributor-signed installations.
-- [ ] Make the APK's currently ignored weather-icon assets reproducible through
-  an authorized source asset set or documented import step.
+- [x] Define shared GIF disposal/transparency, endpoint sampling and bounded
+  timing; share fixture vectors across Python, Android, and iOS and report source
+  versus sent frame counts and interval.
+- [x] Document Python area-average versus mobile nearest-neighbor resampling and
+  explain that final geometry is shared but fine image pixels may differ.
+- [x] Bound Python incoming/pending alerts and Android's display executor/alert
+  queues; expose drops, queue depths and weather freshness. Keep clock refreshes
+  coalesced to the latest composed snapshot.
+- [x] Add explicit Android service-to-manual handoff guidance and optional
+  `SPOTLED_LOCK_FILE` coordination among Python processes on one host. The UI and
+  docs explicitly state that this does not reserve the display across phones.
+- [x] Add Python offline `--inspect` and `--dry-run`, and distinct phone preview
+  and send actions.
+- [x] Label native phone previews as the static initial viewport, not firmware
+  marquee playback.
+- [x] Add iOS version/build identification, keyboard dismissal, VoiceOver labels,
+  and actionable Bluetooth-permission guidance.
+- [x] Align Python package version diagnostics/dependencies and add focused pure
+  protocol/GIF tests that import without BLE drivers.
+- [x] Document the Android signing-key migration path and backup safeguards.
+- [x] Track authorized Wetter.ax GIF source assets and make Android APK asset
+  copying reproducible from that canonical set.
+
+## Pending owner action
+
+- [ ] Create and securely back up the owner-controlled Android signing key.
+  Key creation and backup confirmation are intentionally not automated; current
+  contributor-signed installations cannot update in place after key migration.
 
 ## Pending validation — implemented features, not development tasks
 
+- [x] User confirms Android image regression checks pass: separate Preview/Send,
+  mirrored EXIF and large-image handling, and the source/sent GIF-frame/timing
+  summary.
+- [ ] On iOS, verify the revised Send labels, version/build About panel and
+  keyboard-dismiss action in the contributor's signed app.
+- [x] User confirms iOS Portrait letters are correctly oriented with the 270°
+  clockwise transform.
+- [ ] Validate full-message Scroll Left without clipping on iOS; confirm the
+  preview shows the initial viewport and image Rotation/Fit does not affect text.
+- [ ] Validate Landscape/Portrait orientation and Scroll Left on Android and
+  Python, including complete-string scrolling without clipping.
+- [ ] Confirm Android/iOS live-capability queries against a physical SpotLED;
+  unit tests cover response parsing and incompatible/undersized-device rejection.
 - [ ] Confirm the iOS text/image/GIF transfer matrix, speed choices and target
   restore/pending-send behavior. Keep the existing icon and capital-I-height
   confirmations; do not repeat them as open tasks.
@@ -66,9 +74,9 @@ feature still needs implementation.
   timeout/recovery, Bluetooth/background interruption, cancellation and a
   successful subsequent send. Late-callback and disconnect/write race injection
   remain in the automated P0 test item above.
-- [ ] Test image/GIF edge cases across platforms: transparency, mirrored camera
-  orientation, rapid reselection, odd-sized crops and variable GIF delays.
-  Preserve the already-confirmed Android/Python rotation, fit and GIF results.
+- [x] User confirms the image regression test run passed; no image bugs were
+  reported. Android EXIF mirroring and previously confirmed rotation, fit and GIF
+  behavior remain part of the validated image path.
 - [ ] Resolve intermittent panel-refresh discrepancy: service logs contain one
   composed update at 21:39, 21:42, and 21:45; user observed two visible refreshes
   at 21:39 and one at 21:42. On shutdown, buffered output flushed repeated pairs

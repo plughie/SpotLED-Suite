@@ -9,6 +9,75 @@ final class SpotLedProtocol {
     static final int SCREEN_HEIGHT = 16;
     static final int MAX_RECEIVE_BYTES = 7280;
 
+    static final class Capabilities {
+        final int width, height, colorType, maxFrames, receiveBytes;
+        Capabilities(int width, int height, int colorType, int maxFrames, int receiveBytes) {
+            this.width = width; this.height = height; this.colorType = colorType;
+            this.maxFrames = maxFrames; this.receiveBytes = receiveBytes;
+        }
+    }
+
+    static byte[] buildQuery(int queryId, int serial) {
+        if (queryId < 0 || queryId > 255 || serial < 0 || serial > 0xffff)
+            throw new IllegalArgumentException("Invalid query ID or serial");
+        return new byte[] {4, (byte) queryId, (byte) (serial >> 8), (byte) serial};
+    }
+
+    static int parseScreenResponse(byte[] frame, int serial) {
+        if (frame == null || frame.length < 14 || (frame[0] & 0xff) != frame.length
+                || (frame[1] & 0xff) != 0x13 || u16(frame, 2) != serial)
+            throw new IllegalArgumentException("Invalid screen-capability response");
+        if (frame[4] != 0) throw new IllegalArgumentException("Display rejected screen-capability query");
+        return (u16(frame, 5) << 16) | u16(frame, 7) << 0;
+    }
+
+    static Capabilities parseCapabilities(byte[] screen, byte[] animation, byte[] capacity,
+                                          int screenSerial, int animationSerial, int capacitySerial) {
+        int dimensions = parseScreenResponse(screen, screenSerial);
+        if (!validSimpleResponse(animation, 0x1b, animationSerial, 9)
+                || !validSimpleResponse(capacity, 0x15, capacitySerial, 9))
+            throw new IllegalArgumentException("Invalid display-capability response");
+        if (animation[4] != 0 || capacity[4] != 0)
+            throw new IllegalArgumentException("Display rejected a capability query");
+        return new Capabilities(dimensions >>> 16, dimensions & 0xffff, screen[9] & 0xff,
+                u16(animation, 5), (int) u32(capacity, 5));
+    }
+
+    static void validateNativeText(Capabilities c, byte[][] payloads) {
+        if (c.receiveBytes <= 0) throw new IllegalArgumentException("Display reports no receive capacity.");
+        for (byte[] payload : payloads) if (payload.length > c.receiveBytes)
+            throw new IllegalArgumentException("Text exceeds the display's live receive limit ("
+                    + c.receiveBytes + " bytes); no content was sent.");
+    }
+
+    static void validateRgb(Capabilities c, int width, int height, int frameCount, int payloadBytes) {
+        if (c.width != width || c.height != height)
+            throw new IllegalArgumentException("Image is " + width + "×" + height
+                    + " but this display reports " + c.width + "×" + c.height + ". No content was sent.");
+        if (c.colorType != 0xff)
+            throw new IllegalArgumentException(String.format(java.util.Locale.ROOT,
+                    "RGB images require color type 0xFF; display reports 0x%02X. No content was sent.", c.colorType));
+        if (frameCount > c.maxFrames)
+            throw new IllegalArgumentException("Animation exceeds the display's live frame limit ("
+                    + c.maxFrames + "); no content was sent.");
+        if (c.receiveBytes <= 0 || payloadBytes > c.receiveBytes)
+            throw new IllegalArgumentException("Image transfer exceeds the display's live receive limit ("
+                    + c.receiveBytes + " bytes); no content was sent.");
+    }
+
+    private static boolean validSimpleResponse(byte[] frame, int id, int serial, int minLength) {
+        return frame != null && frame.length >= minLength && (frame[0] & 0xff) == frame.length
+                && (frame[1] & 0xff) == id && u16(frame, 2) == serial;
+    }
+
+    private static int u16(byte[] b, int offset) {
+        return ((b[offset] & 0xff) << 8) | (b[offset + 1] & 0xff);
+    }
+    private static long u32(byte[] b, int offset) {
+        return ((long)(b[offset] & 0xff) << 24) | ((long)(b[offset + 1] & 0xff) << 16)
+                | ((long)(b[offset + 2] & 0xff) << 8) | (b[offset + 3] & 0xffL);
+    }
+
     private SpotLedProtocol() {}
 
     static int checksum(byte[] data, int length) {
@@ -72,17 +141,26 @@ final class SpotLedProtocol {
 
     static byte[][] buildNativeTextTransfers(String text, int paletteIndex, int effectMode,
                                              int timeMs) {
-        return buildNativeTextTransfers(text, paletteIndex, effectMode, timeMs, null);
+        return buildNativeTextTransfers(text, paletteIndex, effectMode, timeMs, null, 0);
+    }
+
+    static byte[][] buildRotatedNativeTextTransfers(String text, int paletteIndex,
+                                                    int effectMode, int timeMs,
+                                                    int glyphRotationDegrees) {
+        if (glyphRotationDegrees != 90 && glyphRotationDegrees != 270)
+            throw new IllegalArgumentException("Rotated native text must use 90 or 270 degrees");
+        return buildNativeTextTransfers(text, paletteIndex, effectMode, timeMs, null,
+                glyphRotationDegrees);
     }
 
     static byte[][] buildNativeTextTransfersSolidColor(String text, int argb,
                                                         int effectMode, int timeMs) {
-        return buildNativeTextTransfers(text, 0, effectMode, timeMs, argb);
+        return buildNativeTextTransfers(text, 0, effectMode, timeMs, argb, 0);
     }
 
     private static byte[][] buildNativeTextTransfers(String text, int paletteIndex,
                                                      int effectMode, int timeMs,
-                                                     Integer solidColor) {
+                                                     Integer solidColor, int glyphRotationDegrees) {
         if (text == null || text.isEmpty()) throw new IllegalArgumentException("Text must not be empty");
         if (text.length() > 160) throw new IllegalArgumentException("Text exceeds the 160-character device limit");
         if (!isNativeTextEffect(effectMode)) throw new IllegalArgumentException("Unknown native text effect");
@@ -97,7 +175,8 @@ final class SpotLedProtocol {
         ByteArrayOutputStream fonts = new ByteArrayOutputStream();
         // Match the Python sender's WordStock semantics: one font entry per character,
         // in the same order as CharacterString, including repeated characters.
-        for (int i = 0; i < text.length(); i++) append(fonts, fontObject(text.charAt(i)));
+        for (int i = 0; i < text.length(); i++)
+            append(fonts, rotatedFontObject(text.charAt(i), glyphRotationDegrees));
         byte[] wordStock = objectWithFollow(5,
                 new byte[] {(byte) (text.length() >> 8), (byte) text.length()}, fonts.toByteArray());
 
@@ -160,6 +239,33 @@ final class SpotLedProtocol {
     }
 
     static byte[] nativeFontObject(char ch) { return fontObject(ch); }
+
+    static byte[] rotatedFontObject(char ch, int degrees) {
+        byte[] glyph = fontObject(ch);
+        if (degrees == 0) return glyph;
+        if (degrees != 90 && degrees != 270)
+            throw new IllegalArgumentException("Glyph rotation must be 0, 90, or 270 degrees");
+        byte[] rotated = glyph.clone();
+        for (int y = 0; y < 16; y++) {
+            rotated[14 + y * 2] = 0;
+            rotated[15 + y * 2] = 0;
+        }
+        for (int y = 0; y < 16; y++) {
+            int bits = ((glyph[14 + y * 2] & 0xff) << 8) | (glyph[15 + y * 2] & 0xff);
+            for (int x = 0; x < 16; x++) {
+                if ((bits & (0x8000 >>> x)) == 0) continue;
+                int outX = degrees == 90 ? 15 - y : y;
+                int outY = degrees == 90 ? x : 15 - x;
+                int offset = 14 + outY * 2;
+                int row = ((rotated[offset] & 0xff) << 8) | (rotated[offset + 1] & 0xff);
+                row |= 0x8000 >>> outX;
+                rotated[offset] = (byte) (row >> 8);
+                rotated[offset + 1] = (byte) row;
+            }
+        }
+        rotated[rotated.length - 1] = (byte) checksum(rotated, rotated.length - 1);
+        return rotated;
+    }
 
     static byte[] buildStart(int serial, int commandId, int totalLength) {
         byte[] packet = new byte[10];

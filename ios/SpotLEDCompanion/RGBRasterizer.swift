@@ -19,9 +19,75 @@ enum ImageFit: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
+enum TextPanelOrientation: String, CaseIterable, Identifiable, Sendable {
+    case landscape = "Landscape"
+    case portrait = "Portrait"
+
+    var id: String { rawValue }
+    init(rotationDegrees: Int) {
+        self = rotationDegrees == 270 ? .portrait : .landscape
+    }
+    var textRotation: Int {
+        switch self {
+        case .landscape: return 0
+        case .portrait: return 270
+        }
+    }
+}
+
+struct RGBTextFrames: Sendable {
+    let preview: RGBFrame
+    let wire: RGBFrame
+}
+
 enum RGBRasterizer {
+    static func textFrames(_ text: String, color: SpotLEDTextColor,
+                           orientation: TextPanelOrientation) -> RGBTextFrames {
+        if orientation != .landscape {
+            let panel = nativeTextFrame(text, color: color,
+                                        glyphRotation: orientation.textRotation)
+            return RGBTextFrames(preview: panel, wire: panel)
+        }
+        let chars = normalizedASCII(text)
+        let sourceWidth = max(1, chars.count * 4 - 1)
+        var pixels = [UInt8](repeating: 0, count: sourceWidth * 5 * 3)
+        for (characterIndex, byte) in chars.enumerated() {
+            let rows = CompactFont.rows(for: byte)
+            let rgb = color.rgb(at: characterIndex, count: chars.count)
+            for y in 0..<5 {
+                let columns = Array(rows[y].utf8)
+                for x in 0..<3 where columns[x] == 49 {
+                    let offset = (y * sourceWidth + characterIndex * 4 + x) * 3
+                    pixels[offset] = rgb[0]
+                    pixels[offset + 1] = rgb[1]
+                    pixels[offset + 2] = rgb[2]
+                }
+            }
+        }
+        let preview = fitPixels(pixels, width: sourceWidth, height: 5,
+                                rotation: 0, fit: .contain,
+                                targetWidth: RGBFrame.screenWidth,
+                                targetHeight: RGBFrame.screenHeight)
+        return RGBTextFrames(preview: preview, wire: preview)
+    }
+
+    static func gifSampleIndices(frameCount: Int, limit: Int = 2) -> [Int] {
+        guard frameCount > 0, limit > 0 else { return [] }
+        let count = min(frameCount, limit)
+        guard count > 1 else { return [0] }
+        return (0..<count).map { Int((Double($0) * Double(frameCount - 1)
+                                      / Double(count - 1)).rounded()) }
+    }
+
+    static func gifIntervalMs(totalDurationMs: Double, sentFrameCount: Int) -> UInt16 {
+        guard sentFrameCount > 0 else { return 250 }
+        let average = Int((max(0, totalDurationMs) / Double(sentFrameCount)).rounded())
+        return UInt16(max(250, min(1000, average)))
+    }
+
     static func imageFrames(_ data: Data, rotation: Int, fit: ImageFit)
-        throws -> (frames: [RGBFrame], intervalMs: UInt16) {
+        throws -> (frames: [RGBFrame], intervalMs: UInt16, originalFrameCount: Int) {
+        try checkCancellation()
         guard data.count <= 50_000_000 else { throw SpotLEDProtocolError.transferTooLarge }
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw SpotLEDProtocolError.invalidFrame
@@ -36,26 +102,14 @@ enum RGBRasterizer {
             let delay = (gif?[kCGImagePropertyGIFUnclampedDelayTime] as? NSNumber)?.doubleValue
                 ?? (gif?[kCGImagePropertyGIFDelayTime] as? NSNumber)?.doubleValue
                 ?? 0.1
-            delays.append(max(0.02, delay))
+            delays.append(max(0.02, delay == 0 ? 0.1 : delay))
         }
         let totalDuration = delays.reduce(0, +)
-        let sampleIndices: [Int]
-        if frameCount > 1 {
-            let midpoint = totalDuration / 2
-            var elapsed = 0.0
-            var secondIndex = frameCount / 2
-            for (index, delay) in delays.enumerated() {
-                elapsed += delay
-                if elapsed >= midpoint { secondIndex = index; break }
-            }
-            if secondIndex == 0 { secondIndex = min(1, frameCount - 1) }
-            sampleIndices = [0, secondIndex]
-        } else {
-            sampleIndices = [0]
-        }
+        let sampleIndices = gifSampleIndices(frameCount: frameCount)
 
         var frames: [RGBFrame] = []
         for index in sampleIndices {
+            try checkCancellation()
             let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
             let width = (properties?[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
             let height = (properties?[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
@@ -76,22 +130,31 @@ enum RGBRasterizer {
             guard let oriented = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else {
                 throw SpotLEDProtocolError.invalidFrame
             }
+            try checkCancellation()
             let normalized = UIImage(cgImage: oriented, scale: 1, orientation: .up)
             frames.append(try imageFrame(normalized, rotation: rotation, fit: fit))
         }
         let interval = frameCount > 1
-            ? max(250, min(1000, Int((totalDuration * 500).rounded())))
+            ? gifIntervalMs(totalDurationMs: totalDuration * 1000,
+                            sentFrameCount: sampleIndices.count)
             : 500
-        return (frames, UInt16(interval))
+        return (frames, interval, frameCount)
     }
 
     static func nativeTextFrame(_ text: String, color: SpotLEDTextColor) -> RGBFrame {
-        let chars = normalizedASCII(text, uppercased: false)
+        nativeTextFrame(text, color: color, glyphRotation: 0)
+    }
+
+    static func nativeTextFrame(_ text: String, color: SpotLEDTextColor,
+                                glyphRotation: Int) -> RGBFrame {
+        let codePoints = text.unicodeScalars.map { scalar in
+            scalar.value <= 0xFFFF ? UInt16(scalar.value) : UInt16(UInt8(ascii: "?"))
+        }
         var pixels = [UInt8](repeating: 0,
                              count: RGBFrame.screenWidth * RGBFrame.screenHeight * 3)
-        for (characterIndex, byte) in chars.enumerated() {
-            let glyph = SpotLEDProtocol.nativeFontObject(byte)
-            let rgb = color.rgb(at: characterIndex, count: chars.count)
+        for (characterIndex, codePoint) in codePoints.enumerated() {
+            let glyph = SpotLEDProtocol.rotatedNativeFontObject(codePoint, degrees: glyphRotation)
+            let rgb = color.rgb(at: characterIndex, count: codePoints.count)
             let xStart = characterIndex * 16
             guard xStart < RGBFrame.screenWidth, glyph.count >= 46 else { continue }
             for y in 0..<RGBFrame.screenHeight {
@@ -144,7 +207,7 @@ enum RGBRasterizer {
             image.draw(in: CGRect(origin: .zero, size: sourceSize))
         }
         guard let cg = normalized.cgImage else { throw SpotLEDProtocolError.invalidFrame }
-        let sourceBytes = rgbBytes(from: cg)
+        let sourceBytes = try rgbBytes(from: cg)
         return fitPixels(sourceBytes, width: cg.width, height: cg.height,
                          rotation: rotation, fit: fit)
     }
@@ -175,7 +238,7 @@ enum RGBRasterizer {
         })
     }
 
-    private static func rgbBytes(from image: CGImage) -> [UInt8] {
+    private static func rgbBytes(from image: CGImage) throws -> [UInt8] {
         let width = image.width
         let height = image.height
         var rgba = [UInt8](repeating: 0, count: width * height * 4)
@@ -189,19 +252,29 @@ enum RGBRasterizer {
             context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         }
         var rgb = [UInt8](repeating: 0, count: width * height * 3)
-        for pixel in 0..<(width * height) {
-            rgb[pixel * 3] = rgba[pixel * 4]
-            rgb[pixel * 3 + 1] = rgba[pixel * 4 + 1]
-            rgb[pixel * 3 + 2] = rgba[pixel * 4 + 2]
+        for y in 0..<height {
+            try checkCancellation()
+            for x in 0..<width {
+                let pixel = y * width + x
+                rgb[pixel * 3] = rgba[pixel * 4]
+                rgb[pixel * 3 + 1] = rgba[pixel * 4 + 1]
+                rgb[pixel * 3 + 2] = rgba[pixel * 4 + 2]
+            }
         }
         return rgb
     }
 
+    private static func checkCancellation() throws {
+        if withUnsafeCurrentTask(body: { $0?.isCancelled ?? false }) {
+            throw CancellationError()
+        }
+    }
+
     private static func fitPixels(_ source: [UInt8], width: Int, height: Int,
-                                  rotation: Int, fit: ImageFit) -> RGBFrame {
+                                  rotation: Int, fit: ImageFit,
+                                  targetWidth: Int = RGBFrame.screenWidth,
+                                  targetHeight: Int = RGBFrame.screenHeight) -> RGBFrame {
         let rotated = rotate(source, width: width, height: height, degrees: rotation)
-        let targetWidth = RGBFrame.screenWidth
-        let targetHeight = RGBFrame.screenHeight
         let scale = fit == .stretch ? 0 : (fit == .contain
             ? min(Double(targetWidth) / Double(rotated.width), Double(targetHeight) / Double(rotated.height))
             : max(Double(targetWidth) / Double(rotated.width), Double(targetHeight) / Double(rotated.height)))
@@ -237,8 +310,8 @@ enum RGBRasterizer {
         return RGBFrame(width: targetWidth, height: targetHeight, bytes: output)
     }
 
-    private static func rotate(_ pixels: [UInt8], width: Int, height: Int,
-                               degrees: Int) -> (width: Int, height: Int, bytes: [UInt8]) {
+    static func rotate(_ pixels: [UInt8], width: Int, height: Int,
+                       degrees: Int) -> (width: Int, height: Int, bytes: [UInt8]) {
         let normalized = ((degrees % 360) + 360) % 360
         guard normalized != 0 else { return (width, height, pixels) }
         let outWidth = normalized == 180 ? width : height
