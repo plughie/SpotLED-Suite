@@ -31,6 +31,20 @@ notes are preserved in [PROJECT_HISTORY.md](PROJECT_HISTORY.md).
   that rerun is unverified. No iOS release artifact is produced.
   Physical image-gesture validation remains pending.
 
+## [0.19.9] - 2026-10-23
+
+- Fix Android manual handoff: selected notification-forwarding apps may remain
+  configured while the time/weather/MQTT foreground service is off. Forwarding
+  remains gated by the service, and stopping it no longer causes Apply to be
+  rejected.
+- Match iOS image framing on Android: pinch and drag directly on the preview;
+  keep a crop readout and Reset crop, and remove the separate pan/zoom sliders.
+- Choosing another image now stops an active vertical-scroll loop and opens the
+  picker after BLE disconnects.
+- Android v0.19.9 (versionCode 33): 49 JVM tests, `lintRelease`, and
+  `assembleRelease` pass. The release APK uses the local debug signing identity
+  for contributor sideloading; this is not a production signing key.
+
 ## [Unreleased]
 
 ## [0.19.7] - 2026-10-23

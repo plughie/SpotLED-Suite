@@ -35,7 +35,6 @@ import android.widget.ImageView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -78,13 +77,11 @@ public final class MainActivity extends Activity {
     private Spinner textOrientationSpinner;
     private Spinner textEffectSpinner;
     private Spinner textColorSpinner;
-    private SeekBar imageZoomBar;
-    private SeekBar imagePanXBar;
-    private SeekBar imagePanYBar;
-    private TextView imageZoomValue;
-    private TextView imagePanXValue;
-    private TextView imagePanYValue;
     private LinearLayout imageViewportControls;
+    private TextView imageCropSummary;
+    private int imageZoomPercent = 100;
+    private int imagePanXPercent;
+    private int imagePanYPercent;
     private Switch verticalImageScrollSwitch;
     private Uri selectedImageUri;
     private ImageView preview;
@@ -92,6 +89,7 @@ public final class MainActivity extends Activity {
     private Button stopImageScrollButton;
     private boolean pendingVerticalScroll;
     private boolean verticalScrollRunning;
+    private boolean openPickerAfterScrollStop;
     private Runnable pendingPreviewSend;
     private SpotLedBleClient ble;
     private final Handler previewHandler = new Handler(Looper.getMainLooper());
@@ -137,6 +135,10 @@ public final class MainActivity extends Activity {
                     if (pendingPreviewSend != null) {
                         sendPreviewButton.setText("Send scrolling image");
                         sendPreviewButton.setEnabled(true);
+                    }
+                    if (openPickerAfterScrollStop) {
+                        openPickerAfterScrollStop = false;
+                        previewHandler.post(MainActivity.this::openImagePicker);
                     }
                 }
                 if (message.startsWith("Display not found.")
@@ -359,32 +361,21 @@ public final class MainActivity extends Activity {
         imageViewportControls.setVisibility(verticalImageScrollSwitch.isChecked() ? View.GONE : View.VISIBLE);
         page.addView(imageViewportControls);
 
-        imageZoomValue = new TextView(this);
-        imageZoomBar = new SeekBar(this);
-        imageZoomBar.setMax(300); // 1.0× through 4.0× in 0.01× steps
-        imageZoomBar.setProgress(Math.max(0, Math.min(300,
-                preferences.getInt(PREF_IMAGE_ZOOM, 100) - 100)));
-        addViewportSeekBar(imageViewportControls, imageZoomValue, imageZoomBar, "Zoom");
-
-        imagePanXValue = new TextView(this);
-        imagePanXBar = new SeekBar(this);
-        imagePanXBar.setMax(200);
-        imagePanXBar.setProgress(Math.max(0, Math.min(200,
-                preferences.getInt(PREF_IMAGE_PAN_X, 0) + 100)));
-        addViewportSeekBar(imageViewportControls, imagePanXValue, imagePanXBar, "Pan left/right");
-
-        imagePanYValue = new TextView(this);
-        imagePanYBar = new SeekBar(this);
-        imagePanYBar.setMax(200);
-        imagePanYBar.setProgress(Math.max(0, Math.min(200,
-                preferences.getInt(PREF_IMAGE_PAN_Y, 0) + 100)));
-        addViewportSeekBar(imageViewportControls, imagePanYValue, imagePanYBar, "Pan up/down");
+        imageZoomPercent = Math.max(100, Math.min(400,
+                preferences.getInt(PREF_IMAGE_ZOOM, 100)));
+        imagePanXPercent = Math.max(-100, Math.min(100,
+                preferences.getInt(PREF_IMAGE_PAN_X, 0)));
+        imagePanYPercent = Math.max(-100, Math.min(100,
+                preferences.getInt(PREF_IMAGE_PAN_Y, 0)));
+        imageCropSummary = new TextView(this);
+        imageCropSummary.setTextSize(14);
+        imageViewportControls.addView(imageCropSummary);
         Button resetCrop = new Button(this);
         resetCrop.setText("Reset crop");
         resetCrop.setOnClickListener(view -> {
-            imageZoomBar.setProgress(0);
-            imagePanXBar.setProgress(100);
-            imagePanYBar.setProgress(100);
+            imageZoomPercent = 100;
+            imagePanXPercent = 0;
+            imagePanYPercent = 0;
             saveImageViewportPreferences();
             updateViewportLabels();
             reprocessSelectedImage();
@@ -397,23 +388,6 @@ public final class MainActivity extends Activity {
             fitSpinner.setEnabled(!checked);
             preferences.edit().putBoolean(PREF_VERTICAL_IMAGE_SCROLL, checked).apply();
             reprocessSelectedImage();
-        });
-    }
-
-    private void addViewportSeekBar(LinearLayout parent, TextView value, SeekBar bar, String label) {
-        value.setText(label);
-        value.setTextSize(14);
-        parent.addView(value);
-        parent.addView(bar);
-        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                updateViewportLabels();
-                if (fromUser) saveImageViewportPreferences();
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) { }
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {
-                reprocessSelectedImage();
-            }
         });
     }
 
@@ -450,19 +424,15 @@ public final class MainActivity extends Activity {
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
-                    float oldZoom = 1 + imageZoomBar.getProgress() / 100f;
+                    float oldZoom = imageZoomPercent / 100f;
                     int width = Math.max(1, imagePreviewView.getWidth());
                     int height = Math.max(1, imagePreviewView.getHeight());
-                    int newZoomProgress = Math.max(0, Math.min(300,
-                            Math.round(oldZoom * imageGestureScale * 100) - 100));
-                    imageZoomBar.setProgress(newZoomProgress);
-                    float baseZoom = oldZoom;
-                    imagePanXBar.setProgress(Math.max(0, Math.min(200,
-                            Math.round(imagePanXBar.getProgress() - imageGestureDx * 200f
-                                    / width / baseZoom))));
-                    imagePanYBar.setProgress(Math.max(0, Math.min(200,
-                            Math.round(imagePanYBar.getProgress() - imageGestureDy * 200f
-                                    / height / baseZoom))));
+                    imageZoomPercent = Math.max(100, Math.min(400,
+                            Math.round(oldZoom * imageGestureScale * 100)));
+                    imagePanXPercent = Math.max(-100, Math.min(100,
+                            Math.round(imagePanXPercent - imageGestureDx * 200f / width / oldZoom)));
+                    imagePanYPercent = Math.max(-100, Math.min(100,
+                            Math.round(imagePanYPercent - imageGestureDy * 200f / height / oldZoom)));
                     imagePreviewView.setScaleX(1f);
                     imagePreviewView.setScaleY(1f);
                     imagePreviewView.setTranslationX(0f);
@@ -482,19 +452,18 @@ public final class MainActivity extends Activity {
     }
 
     private void updateViewportLabels() {
-        if (imageZoomValue == null) return;
-        imageZoomValue.setText(String.format(java.util.Locale.ROOT, "Zoom %.2f×",
-                1 + imageZoomBar.getProgress() / 100.0));
-        imagePanXValue.setText("Pan left/right " + (imagePanXBar.getProgress() - 100) + "%");
-        imagePanYValue.setText("Pan up/down " + (imagePanYBar.getProgress() - 100) + "%");
+        if (imageCropSummary == null) return;
+        imageCropSummary.setText(String.format(java.util.Locale.ROOT,
+                "Pinch to zoom, drag to pan\nCrop: %.2f× · X %d%% · Y %d%%",
+                imageZoomPercent / 100.0, imagePanXPercent, imagePanYPercent));
     }
 
     private void saveImageViewportPreferences() {
-        if (imageZoomBar == null) return;
+        if (imageCropSummary == null) return;
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-                .putInt(PREF_IMAGE_ZOOM, 100 + imageZoomBar.getProgress())
-                .putInt(PREF_IMAGE_PAN_X, imagePanXBar.getProgress() - 100)
-                .putInt(PREF_IMAGE_PAN_Y, imagePanYBar.getProgress() - 100)
+                .putInt(PREF_IMAGE_ZOOM, imageZoomPercent)
+                .putInt(PREF_IMAGE_PAN_X, imagePanXPercent)
+                .putInt(PREF_IMAGE_PAN_Y, imagePanYPercent)
                 .apply();
     }
 
@@ -636,7 +605,7 @@ public final class MainActivity extends Activity {
                 PhoneNotificationListenerService.PREF_FORWARD_ENABLED, false));
         form.addView(forwardPhoneNotifications);
         TextView forwardingExplanation = new TextView(this);
-        forwardingExplanation.setText("Selected apps' notification text scrolls across the SpotLED while this service is running. If you select SPOTLED Companion, only MQTT connection/subscription errors are forwarded; routine service status is suppressed. Choose apps, then grant Notification Access in Android Settings.");
+        forwardingExplanation.setText("Selected apps' notification text scrolls across the SpotLED while this service is running. The selection can stay saved while the service is stopped; forwarding resumes next time it runs. If you select SPOTLED Companion, only MQTT connection/subscription errors are forwarded; routine service status is suppressed. Choose apps, then grant Notification Access in Android Settings.");
         forwardingExplanation.setTextSize(13);
         forwardingExplanation.setPadding(0, dp(2), 0, dp(6));
         form.addView(forwardingExplanation);
@@ -712,10 +681,6 @@ public final class MainActivity extends Activity {
                 boolean notificationsConfigured = !serviceText(notifyTopic).isEmpty();
                 boolean mqttNeeded = haSource || notificationsConfigured;
                 boolean forwardNotifications = forwardPhoneNotifications.isChecked();
-                if (forwardNotifications && !run) {
-                    Toast.makeText(this, "Enable the foreground service to forward phone notifications.", Toast.LENGTH_LONG).show();
-                    return;
-                }
                 if (forwardNotifications && pendingForwardPackages.isEmpty()) {
                     Toast.makeText(this, "Choose at least one app to forward.", Toast.LENGTH_LONG).show();
                     return;
@@ -1170,8 +1135,15 @@ public final class MainActivity extends Activity {
 
     private void openImagePicker() {
         if (requireStatusServiceStopped()) return;
+        if (verticalScrollRunning) {
+            openPickerAfterScrollStop = true;
+            statusView.setText("Stopping vertical scroll before opening image picker…");
+            if (stopImageScrollButton != null) stopImageScrollButton.setEnabled(false);
+            ble.cancelVerticalScroll();
+            return;
+        }
         if (ble.isTransferInProgress()) {
-            statusView.setText("Stop the active image scroll before choosing another image.");
+            statusView.setText("Wait for the current image transfer to finish before choosing another image.");
             return;
         }
         cancelImageImport();
@@ -1213,9 +1185,9 @@ public final class MainActivity extends Activity {
         final int rotationDegrees = rotationSpinner.getSelectedItemPosition() * 90;
         String[] fitModes = {"contain", "cover", "stretch"};
         final String fitMode = fitModes[fitSpinner.getSelectedItemPosition()];
-        final double zoom = 1 + imageZoomBar.getProgress() / 100.0;
-        final double panX = (imagePanXBar.getProgress() - 100) / 100.0;
-        final double panY = (imagePanYBar.getProgress() - 100) / 100.0;
+        final double zoom = imageZoomPercent / 100.0;
+        final double panX = imagePanXPercent / 100.0;
+        final double panY = imagePanYPercent / 100.0;
         final boolean verticalScroll = verticalImageScrollSwitch.isChecked();
         statusView.setText("Preparing image preview…");
         sendPreviewButton.setEnabled(false);

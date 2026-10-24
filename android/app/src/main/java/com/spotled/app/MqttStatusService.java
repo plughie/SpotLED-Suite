@@ -120,7 +120,8 @@ public final class MqttStatusService extends Service {
                         + " displayQueueReady=" + (displayQueue != null)
                         + " forwardingEnabled=" + forwardingEnabled
                         + " serviceEnabled=" + serviceEnabled);
-            if (stopping || displayQueue == null || !forwardingEnabled || !serviceEnabled) return;
+            if (stopping || displayQueue == null
+                    || !shouldForwardPhoneNotifications(serviceEnabled, forwardingEnabled)) return;
             Set<String> selected = preferences.getStringSet(
                     PhoneNotificationListenerService.PREF_FORWARD_PACKAGES, Collections.emptySet());
             if (packageName == null || !selected.contains(packageName)) {
@@ -148,6 +149,11 @@ public final class MqttStatusService extends Service {
         return brokerHost != null && !brokerHost.trim().isEmpty()
                 && ("homeassistant".equals(weatherSource)
                 || (notificationTopic != null && !notificationTopic.trim().isEmpty()));
+    }
+
+    static boolean shouldForwardPhoneNotifications(boolean serviceEnabled,
+                                                   boolean forwardingEnabled) {
+        return serviceEnabled && forwardingEnabled;
     }
 
     static String normalizeIndoorUrl(String value) throws MalformedURLException {

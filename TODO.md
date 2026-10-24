@@ -20,6 +20,11 @@ No open P0 items.
   before decoding, and apply EXIF orientations including mirrored variants. 44
   JVM tests and Android lint pass; physical image/GIF regression validation
   remains in the pending-validation section.
+- [x] Allow stopping Android's time/weather/MQTT service while phone-notification
+  forwarding selections remain saved; forwarding stays inactive while stopped.
+  The service policy has a JVM regression test.
+- [ ] Validate on the Pixel that Apply can stop the service with forwarding
+  selected and that manual Find and Select then starts a BLE scan.
 
 ## P2 — Enhancements and packaging
 
@@ -92,16 +97,17 @@ No open P0 items.
 - [ ] Complete only the still-unconfirmed Android effects/palette cases and,
   if used, MQTT raster-mode comparison.
 - [ ] Review iOS Dynamic Type, VoiceOver and Bluetooth-denied behavior.
-- [ ] Verify g/j/p/q/y descenders in the Android preview and on the physical
-  display; the latest actual iPhone screenshot shows qgyj reaching row 15, which
-  the user thinks will work. Hardware rendering remains untested.
+- [x] User reports functional tests of the descenders and image pan/zoom passed
+  on iOS.
+- [ ] Validate descenders and image pan/zoom on Android. The v0.19.9 build is
+  installed on the Pixel; these features have only been confirmed on iOS so far.
 - [x] Capture a separate temporary `gUq` preview for comparison without
   changing the saved `gUg` text; the `q` descender is visible in that screenshot.
-- [ ] Validate pinch/drag crop behavior and transformed preview/send parity on
-  Android and iOS, plus the equivalent Python viewport flags.
 - [ ] Have the colleague validate full vertical scrolling and loop wrap on a
   tall still image from the Android APK; confirm Stop cancels cleanly without
   rapid flashing. Validate iOS/Python scrolling on hardware if used.
+- [ ] On Pixel, validate choosing another image during an active vertical loop
+  stops the loop and opens the picker after BLE disconnects.
 
 ## Blocked protocol research
 

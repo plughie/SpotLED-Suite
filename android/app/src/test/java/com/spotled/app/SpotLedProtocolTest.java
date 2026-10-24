@@ -377,6 +377,12 @@ public class SpotLedProtocolTest {
         assertFalse(MqttStatusService.shouldConnectMqtt("homeassistant", "", ""));
     }
 
+    @Test public void phoneNotificationForwardingPausesWhileStatusServiceIsStopped() {
+        assertTrue(MqttStatusService.shouldForwardPhoneNotifications(true, true));
+        assertFalse(MqttStatusService.shouldForwardPhoneNotifications(false, true));
+        assertFalse(MqttStatusService.shouldForwardPhoneNotifications(false, false));
+    }
+
     @Test public void tc001AddressExpandsToExpectedTemperatureEndpoint() throws Exception {
         assertEquals("http://192.0.2.42/api/v1/device",
                 MqttStatusService.normalizeIndoorUrl("192.0.2.42"));

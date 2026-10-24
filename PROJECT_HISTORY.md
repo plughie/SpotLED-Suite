@@ -1,5 +1,51 @@
 # Project History
 
+## 2026-10-23 — Diagnose Pixel display discovery block
+
+- Pixel 6a has Bluetooth on and Companion has BLUETOOTH_SCAN/CONNECT granted.
+  The app shows its “Stop the time/weather/MQTT service” gate; this gate reads
+  the persisted service-enabled preference before scanning. Android's service
+  manager shows no `MqttStatusService` instance running, so the likely cause is
+  a stale enabled preference. Bluetooth scan history during this check showed
+  no Companion scan. No settings were changed and no display content was sent.
+- Added a P1 to reconcile the manual-scan guard with actual service lifecycle.
+  Workaround: Gear → Time, weather & MQTT → turn off “Run Android
+  time/weather/MQTT service”, then retry Find and Select Display.
+- Follow-up: the dialog rejected Apply if phone-notification forwarding stayed
+  selected while the service switch was turned off. Removed that rejection;
+  saved forwarding selections now remain dormant until the service next runs.
+  Added a JVM policy test and bumped Android to unreleased v0.19.9 (versionCode
+  33). All 49 Android JVM tests, `lintRelease`, and `assembleRelease` pass. The
+  signed APK is installed/launched on the Pixel 6a; turning the switch off with
+  Apply and retrying display discovery remains pending. No panel content sent.
+
+## 2026-10-23 — Publish Android Companion v0.19.9
+
+- Release adds stop-service Apply behavior when notification forwarding remains
+  selected, removes Android pan/zoom sliders in favor of pinch/drag like iOS,
+  and opens the image picker after cancelling an active vertical scroll.
+- Android v0.19.9 (versionCode 33) is built, signed with the local debug
+  identity, and installed/launched on the Pixel 6a. 49 JVM tests, `lintRelease`,
+  and `assembleRelease` pass. APK SHA-256:
+  `2c60edd6601d4c90bc5eb124626a4df19c98bfb0171dc56c71c54212d028639b`.
+- Published publicly as https://github.com/plughie/SpotLED-Suite/releases/tag/v0.19.9
+  with asset `SpotLED-Companion.apk`. This is an internal contributor APK, not
+  a production signing key. No SpotLED content was sent.
+
+## 2026-10-23 — Match Android image framing interaction to iOS
+
+- Removed Android's separate zoom/pan sliders. The image preview now has the
+  same pinch-to-zoom and drag-to-pan interaction as iOS, with a crop readout and
+  Reset crop. Stored crop settings and Python transform parity are unchanged.
+- Choosing another image during an active vertical loop now requests a safe
+  stop, waits for BLE disconnect, and then opens the image picker.
+- Android's notification-forwarding preference may remain selected while the
+  foreground service is stopped; manual discovery no longer stays blocked by
+  the rejected Apply action. Release validation is being refreshed.
+- Android release JVM tests (49), lint, and the signed v0.19.9 build pass; the
+  updated app is installed/launched on the Pixel 6a. No display content was
+  sent. The service-off/manual-scan handoff still awaits Pixel validation.
+
 ## 2026-10-23 — Keep image framing interactive and restore full descenders
 
 - Replaced iOS image zoom/pan sliders with pinch/drag gestures on the 64×16
@@ -66,6 +112,9 @@
 - Python 67 tests, MQTT 38 tests, Android 48 JVM tests, `lintRelease`, and
   `assembleRelease` pass. The iOS source remains developer-signed only; no iOS
   release artifact was created. `SpotLED-MQTT/env.sh` remains ignored and local.
+- User subsequently reports functional tests of the descenders and image
+  pan/zoom passed on iOS only. The v0.19.8 APK has not been installed on the
+  Pixel; Android physical validation remains open.
 
 ## 2026-10-23 — Implement image pan/zoom and vertical scrolling
 

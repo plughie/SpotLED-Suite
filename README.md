@@ -111,14 +111,14 @@ weather topic. See the [MQTT guide](SpotLED-MQTT/README.md) for all options.
 ### Android Companion
 
 Download and sideload the latest [SpotLED-Companion APK
-(v0.19.8)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.8/SpotLED-Companion.apk).
+(v0.19.9)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.9/SpotLED-Companion.apk).
 The APK is signed for contributor sideloading, not production distribution via
 an app store.
 
 ## Current work state
 
-Android 0.19.8 (versionCode 32) is the latest contributor APK. Current source
-validation passes Python (67 tests), MQTT (38 tests), and Android (48 JVM tests,
+Android 0.19.9 (versionCode 33) is the latest contributor APK. Current source
+validation passes Python (67 tests), MQTT (38 tests), and Android (49 JVM tests,
 lint and release build). Portrait text has only Landscape/Portrait choices;
 Portrait turns native glyphs 270°
 clockwise and retains native marquee scrolling. The user confirmed the glyph
