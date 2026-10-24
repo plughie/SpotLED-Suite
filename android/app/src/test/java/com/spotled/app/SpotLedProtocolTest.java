@@ -444,6 +444,26 @@ public class SpotLedProtocolTest {
         assertEquals(SpotLedProtocol.checksum(characterString, 14), characterString[14] & 0xff);
     }
 
+    @Test public void lowercaseDescendersReachTheLastCellRow() {
+        for (char ch : new char[] {'g', 'j', 'p', 'q', 'y'}) {
+            byte[] glyph = SpotLedProtocol.nativeFontObject(ch);
+            assertTrue(glyph[44] != 0 || glyph[45] != 0);
+            assertTrue(glyph[42] != 0 || glyph[43] != 0);
+            assertEquals(SpotLedProtocol.checksum(glyph, 46), glyph[46] & 0xff);
+            assertEquals(ch, (char) (((glyph[11] & 0xff) << 8) | (glyph[12] & 0xff)));
+            int firstInkRow = 0;
+            while (firstInkRow < 16 && glyph[14 + firstInkRow * 2] == 0
+                    && glyph[15 + firstInkRow * 2] == 0) firstInkRow++;
+            assertEquals(ch == 'j' ? 1 : ch == 'g' ? 3 : 4, firstInkRow);
+            if (ch == 'g') assertEquals(0x0300,
+                    ((glyph[40] & 0xff) << 8) | (glyph[41] & 0xff));
+            if (ch == 'g') assertEquals(0x0600,
+                    ((glyph[42] & 0xff) << 8) | (glyph[43] & 0xff));
+            if (ch == 'g') assertEquals(0x0c00,
+                    ((glyph[44] & 0xff) << 8) | (glyph[45] & 0xff));
+        }
+    }
+
     @Test public void nativeTextTimingIsEncodedInCharacterStringTimeObject() {
         byte[] normal = SpotLedProtocol.buildNativeTextTransfers("A", 0, 3, 200)[1];
         byte[] slow = SpotLedProtocol.buildNativeTextTransfers("A", 0, 3, 300)[1];
@@ -621,6 +641,52 @@ public class SpotLedProtocolTest {
         assertEquals(64 * 16 * 3, stretched.rgb.length);
         assertTrue(countBlackPixels(contained.rgb) > 0);
         assertEquals(0, countBlackPixels(stretched.rgb));
+    }
+
+    @Test public void zoomAndPanSelectOppositeEdgesOfTheViewport() {
+        byte[] source = new byte[] {(byte) 255, 0, 0, 0, 0, (byte) 255};
+        RgbTransforms.Frame left = RgbTransforms.fit(source, 2, 1, 2, 1,
+                "stretch", 2, -1, 0);
+        RgbTransforms.Frame right = RgbTransforms.fit(source, 2, 1, 2, 1,
+                "stretch", 2, 1, 0);
+        assertArrayEquals(new byte[] {(byte) 255, 0, 0, (byte) 255, 0, 0}, left.rgb);
+        assertArrayEquals(new byte[] {0, 0, (byte) 255, 0, 0, (byte) 255}, right.rgb);
+    }
+
+    @Test public void zoomAndPanSelectOppositeEdgesOfTheImageViewport() {
+        byte[] source = new byte[] {(byte) 255, 0, 0, 0, 0, (byte) 255};
+        RgbTransforms.Frame left = RgbTransforms.fit(source, 2, 1, 2, 1,
+                "stretch", 2, -1, 0);
+        RgbTransforms.Frame right = RgbTransforms.fit(source, 2, 1, 2, 1,
+                "stretch", 2, 1, 0);
+        assertArrayEquals(new byte[] {(byte) 255, 0, 0, (byte) 255, 0, 0}, left.rgb);
+        assertArrayEquals(new byte[] {0, 0, (byte) 255, 0, 0, (byte) 255}, right.rgb);
+    }
+
+    @Test public void verticalScrollProducesAdjacentTopToBottomViewports() {
+        byte[] source = new byte[16 * 32 * 3];
+        for (int y = 0; y < 32; y++) for (int x = 0; x < 16; x++) {
+            int offset = (y * 16 + x) * 3;
+            if (y < 16) source[offset] = (byte) 255;
+            else source[offset + 2] = (byte) 255;
+        }
+        RgbTransforms.Frame[] frames = RgbTransforms.verticalScroll(source, 16, 32);
+        assertEquals(8, frames.length);
+        assertEquals(64 * 16 * 3, frames[0].rgb.length);
+        assertEquals((byte) 255, frames[0].rgb[0]);
+        assertEquals((byte) 255, frames[frames.length - 1].rgb[2]);
+        byte[] animation = SpotLedProtocol.buildRgbAnimation(
+                new byte[][] {frames[0].rgb, frames[1].rgb}, 64, 16, 250, 1);
+        assertTrue(indexOf(animation, new byte[] {0, 0, 0, 8, 0, 8, 1, 17}) >= 0);
+    }
+
+    private static int indexOf(byte[] bytes, byte[] sequence) {
+        for (int start = 0; start <= bytes.length - sequence.length; start++) {
+            int index = 0;
+            while (index < sequence.length && bytes[start + index] == sequence[index]) index++;
+            if (index == sequence.length) return start;
+        }
+        return -1;
     }
 
     private static int u16(byte[] bytes, int offset) {

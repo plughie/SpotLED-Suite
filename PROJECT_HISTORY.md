@@ -1,5 +1,113 @@
 # Project History
 
+## 2026-10-23 — Keep image framing interactive and restore full descenders
+
+- Replaced iOS image zoom/pan sliders with pinch/drag gestures on the 64×16
+  preview, moved the preview above its options, and retain the prior rendered
+  preview while the exact transformed frame is recalculated. Android now has a
+  separate image preview above its controls with pinch/drag gestures; the
+  precision sliders and Reset crop remain available. Python's viewport flags
+  continue to use the same pan/zoom transforms.
+- Corrected the lowercase-tail adjustment: shift all rows of g/j/p/q/y upward
+  together, instead of moving only the last-row pixels. This keeps the full
+  two-row descenders and a blank bottom cell row. The subsequent iPhone preview
+  screenshot showed lowercase g still looked like detached feet, so reshape its
+  last descender row into a connected curl. Strengthened platform tests to
+  assert the first ink row, g's tail shape, blank edge row, checksum and
+  preserved character code.
+- Python (67 tests), Android (48 JVM tests, lint and signed build) pass. The
+  initial iOS simulator run passed all 28 tests but reported a SwiftUI frame
+  warning; the preview geometry was bounded afterward and the iOS device build
+  succeeded. Its focused UI rerun stalled while saving the result bundle and
+  was stopped after several minutes; post-adjustment simulator UI behavior is
+  unverified. Installed and launched the updated Android v0.19.8 build on the
+  Pixel 6a and the updated contributor-signed iOS app on the iPhone 17 Pro Max.
+  No display content was sent.
+- Follow-up to the supplied iPhone screenshot: the final panel row was blank,
+  but lowercase g's bottom row still looked like detached feet. Replaced those
+  pixels with a connected lower curl and added an exact bitmap regression test.
+  The updated glyph tables are generated; Python 67 tests, Android 48 tests and
+  lint pass, and the iOS app/test targets build. This glyph correction has not
+  been deployed to iOS; the TODO now requires inspecting a real iPhone
+  screenshot during the next deployment.
+
+## 2026-10-23 — Deploy iOS preview correction and inspect the phone screen
+
+- Built with the owner's iOS development signing profile, installed and launched
+  on the connected iPhone 17 Pro Max. Used a one-shot debug launch argument to
+  bring the native preview into view, then captured and inspected the real
+  device screenshot (`/tmp/spotled-iphone-gUg-preview.png`). The saved text is
+  `gUg`; its preview shows the corrected connected g curl and a blank final
+  16×16 row. A separate temporary `gUq` launch and screenshot
+  (`/tmp/spotled-iphone-gUq-preview.png`) verified q's descender without
+  changing the saved text. No display content was sent. The requested actual-
+  screen check is complete; owner confirmation remains open in TODO.
+
+## 2026-10-23 — Extend lowercase g descender by one row
+
+- User reports the descender still looked short and asks for another pixel row.
+  Extended g/j/p/q/y descenders into cell row 15; g now has a connected
+  four-row curl. Updated shared glyph data and exact bitmap tests across Python,
+  Android and iOS. This deliberately uses the final row, as requested.
+- Python 67 tests, Android 48 release tests and lint pass; the iOS device build
+  and simulator test-target build pass. Installed and launched the updated
+  development app on the iPhone 17 Pro Max. Captured and inspected
+  `/tmp/spotled-iphone-row15-descenders.png`: the saved `qgyj` preview now
+  lights row 15 for each descender. User says this should work. No display
+  content was sent; hardware rendering remains untested.
+
+## 2026-10-23 — Publish Android Companion v0.19.8
+
+- Published the cross-platform image pan/zoom and vertical-scroll work, Android
+  live text preview parity, and the revised g/j/p/q/y bottom-row glyphs in the
+  public repository. Android release v0.19.8 (versionCode 32) is available as
+  `SpotLED-Companion.apk`; it uses the local debug signing identity for
+  contributor sideloading, not a production key.
+- Python 67 tests, MQTT 38 tests, Android 48 JVM tests, `lintRelease`, and
+  `assembleRelease` pass. The iOS source remains developer-signed only; no iOS
+  release artifact was created. `SpotLED-MQTT/env.sh` remains ignored and local.
+
+## 2026-10-23 — Implement image pan/zoom and vertical scrolling
+
+- Added 1–4× zoom and normalized X/Y pan controls on Android/iOS and matching
+  Python CLI transforms; preview and send use the same 64×16 crop. Added a
+  still-image vertical mode that fits to 64 pixels wide and streams adjacent
+  16-row viewports using Scroll Up at 250 ms/step, looping until stopped. GIFs
+  remain on their normal bounded animation path.
+- Python (67 tests), Android (48 JVM tests, lint, signed release APK), and iOS
+  simulator unit tests (27) pass. APK SHA-256:
+  `66e143185c8b37306a6947a0caaa3ee24d5d057fc5306f5aec96ec8ae3a0f69d`.
+  No display content was sent. Physical pan/zoom and scroll-wrap/stop validation
+  remain pending for the colleague. The APK is built locally but not published.
+
+## 2026-10-23 — Match iOS live text preview on Android
+
+- Android text preview now updates as the text and relevant options change.
+  Send text transmits that current preview directly, matching iOS; the separate
+  Preview/Send action remains for images and GIFs. Text edits clear any prior
+  image send action to prevent a stale preview from being sent.
+- Android's 45 JVM tests, `lintDebug`, and `assembleDebug` pass. No display
+  content was sent; the updated interaction remains unvalidated on-device.
+
+## 2026-10-23 — Capture image interaction requests
+
+- Added two image features to the Wishlist: interactive pan/zoom crop controls
+  with preview/send parity across mobile and Python, and a looping vertical
+  viewport that stretches wide and scrolls through tall images. The scroll-mode
+  design must respect current BLE frame/receive limits and avoid rapid flashing.
+
+## 2026-10-23 — Add bottom clearance to lowercase descenders
+
+- The user reports Normal/native text preview descenders clipped at the lower
+  edge and lowercase appearing absent. The captured 16×16 glyphs included
+  lowercase, but g/j/p/q/y used row 15. Updated those canonical glyph bitmaps to
+  move only the descender tail up one row, preserving codepoints and the baseline;
+  regenerated Python, Android, and Swift glyph tables.
+- Python tests (64) and Android JVM tests (45), lint and debug assembly pass. The
+  iOS app/test targets build, and Debug 0.19.7 build 31 is installed/launched on
+  the paired iPhone. No display content was sent. User preview confirmation is
+  pending.
+
 ## 2026-10-23 — Publish SpotLED Suite v0.19.7
 
 - Bumped Android to versionCode 31/versionName 0.19.7. Built and verified the

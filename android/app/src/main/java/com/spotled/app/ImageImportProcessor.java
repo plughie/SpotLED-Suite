@@ -28,16 +28,22 @@ final class ImageImportProcessor {
         final int intervalMs;
         final boolean animated;
         final int originalFrameCount;
+        final int effectMode;
+        final boolean verticalScroll;
 
-        Result(byte[][] frames, int intervalMs, boolean animated, int originalFrameCount) {
+        Result(byte[][] frames, int intervalMs, boolean animated, int originalFrameCount,
+               int effectMode, boolean verticalScroll) {
             this.frames = frames; this.intervalMs = intervalMs; this.animated = animated;
-            this.originalFrameCount = originalFrameCount;
+            this.originalFrameCount = originalFrameCount; this.effectMode = effectMode;
+            this.verticalScroll = verticalScroll;
         }
     }
 
     private ImageImportProcessor() {}
 
-    static Result process(Context context, Uri uri, int rotationDegrees, String fitMode) throws Exception {
+    static Result process(Context context, Uri uri, int rotationDegrees, String fitMode,
+                          double zoom, double panX, double panY,
+                          boolean verticalScroll) throws Exception {
         checkCancelled();
         File temp = File.createTempFile("spotled-image-", ".bin", context.getCacheDir());
         try {
@@ -46,9 +52,12 @@ final class ImageImportProcessor {
             GifMetadata gifMetadata = GifMetadata.read(temp);
             Movie movie;
             try (InputStream stream = new FileInputStream(temp)) { movie = Movie.decodeStream(stream); }
-            if (movie != null && movie.duration() > 0)
-                return processGif(movie, gifMetadata, rotationDegrees, fitMode);
-            return processStill(temp, rotationDegrees, fitMode);
+            if (movie != null && movie.duration() > 0) {
+                if (verticalScroll)
+                    throw new IllegalArgumentException("Vertical scroll mode supports still images only.");
+                return processGif(movie, gifMetadata, rotationDegrees, fitMode, zoom, panX, panY);
+            }
+            return processStill(temp, rotationDegrees, fitMode, zoom, panX, panY, verticalScroll);
         } finally {
             //noinspection ResultOfMethodCallIgnored
             temp.delete();
@@ -81,7 +90,9 @@ final class ImageImportProcessor {
         } catch (Exception ignored) { return -1; }
     }
 
-    private static Result processStill(File file, int rotationDegrees, String fitMode) throws Exception {
+    private static Result processStill(File file, int rotationDegrees, String fitMode,
+                                       double zoom, double panX, double panY,
+                                       boolean verticalScroll) throws Exception {
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
@@ -104,7 +115,9 @@ final class ImageImportProcessor {
         Bitmap oriented = applyExif(decoded, orientation);
         if (oriented != decoded) decoded.recycle();
         try {
-            return new Result(new byte[][] {rasterize(oriented, rotationDegrees, fitMode)}, 500, false, 1);
+            if (verticalScroll) return rasterizeVerticalScroll(oriented, rotationDegrees);
+            return new Result(new byte[][] {rasterize(oriented, rotationDegrees, fitMode,
+                    zoom, panX, panY)}, 500, false, 1, 0, false);
         } finally { oriented.recycle(); }
     }
 
@@ -129,7 +142,8 @@ final class ImageImportProcessor {
     }
 
     private static Result processGif(Movie movie, GifMetadata metadata,
-                                     int rotationDegrees, String fitMode) {
+                                     int rotationDegrees, String fitMode,
+                                     double zoom, double panX, double panY) {
         int width = movie.width(), height = movie.height();
         if (width <= 0 || height <= 0
                 || (long) width * height > ImageImportPolicy.MAX_DECODED_PIXELS)
@@ -148,14 +162,36 @@ final class ImageImportProcessor {
                 canvas.drawColor(Color.BLACK);
                 movie.setTime(sampleIndices[i] == 0 ? 0 : Math.max(0, duration - 1));
                 movie.draw(canvas, 0, 0);
-                frames[i] = rasterize(bitmap, rotationDegrees, fitMode);
+                frames[i] = rasterize(bitmap, rotationDegrees, fitMode, zoom, panX, panY);
             } finally { bitmap.recycle(); }
         }
         int interval = ImageImportPolicy.gifIntervalMs(duration, frames.length);
-        return new Result(frames, interval, sourceFrameCount > 1, sourceFrameCount);
+        return new Result(frames, interval, sourceFrameCount > 1, sourceFrameCount, 0, false);
     }
 
-    private static byte[] rasterize(Bitmap bitmap, int rotationDegrees, String fitMode) {
+    private static Result rasterizeVerticalScroll(Bitmap bitmap, int rotationDegrees) {
+        byte[] rgb = bitmapToRgb(bitmap);
+        RgbTransforms.Frame rotated = RgbTransforms.rotate(
+                rgb, bitmap.getWidth(), bitmap.getHeight(), rotationDegrees);
+        RgbTransforms.Frame[] scrolled = RgbTransforms.verticalScroll(
+                rotated.rgb, rotated.width, rotated.height);
+        byte[][] frames = new byte[scrolled.length][];
+        for (int index = 0; index < scrolled.length; index++) frames[index] = scrolled[index].rgb;
+        boolean scrolling = frames.length > 1;
+        return new Result(frames, 250, scrolling, 1, scrolling ? 1 : 0, scrolling);
+    }
+
+    private static byte[] rasterize(Bitmap bitmap, int rotationDegrees, String fitMode,
+                                    double zoom, double panX, double panY) {
+        int width = bitmap.getWidth(), height = bitmap.getHeight();
+        byte[] rgb = bitmapToRgb(bitmap);
+        RgbTransforms.Frame rotated = RgbTransforms.rotate(rgb, width, height, rotationDegrees);
+        return RgbTransforms.fit(rotated.rgb, rotated.width, rotated.height,
+                SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT, fitMode,
+                zoom, panX, panY).rgb;
+    }
+
+    private static byte[] bitmapToRgb(Bitmap bitmap) {
         checkCancelled();
         int width = bitmap.getWidth(), height = bitmap.getHeight();
         int[] argb = new int[width * height];
@@ -167,9 +203,7 @@ final class ImageImportProcessor {
             rgb[offset++] = (byte) ((Color.green(color) * alpha + 127) / 255);
             rgb[offset++] = (byte) ((Color.blue(color) * alpha + 127) / 255);
         }
-        RgbTransforms.Frame rotated = RgbTransforms.rotate(rgb, width, height, rotationDegrees);
-        return RgbTransforms.fit(rotated.rgb, rotated.width, rotated.height,
-                SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT, fitMode).rgb;
+        return rgb;
     }
 
     private static void checkCancelled() {

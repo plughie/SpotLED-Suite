@@ -2,6 +2,28 @@ import XCTest
 
 final class TransformControlsUITests: XCTestCase {
     @MainActor
+    func testNativeDescenderPreviewIsVisibleOnScreen() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-spotled.text", "gUq"]
+        app.launch()
+
+        let textField = app.textFields["text.message"]
+        XCTAssertTrue(textField.waitForExistence(timeout: 15))
+        XCTAssertEqual(textField.value as? String, "gUq")
+
+        let previewLabel = app.staticTexts["64×16 preview"]
+        for _ in 0..<8 where !previewLabel.isHittable { app.swipeUp() }
+        XCTAssertTrue(previewLabel.waitForExistence(timeout: 10))
+        XCTAssertTrue(previewLabel.isHittable)
+        XCTAssertTrue(app.images["text.preview"].isHittable)
+
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "iPhone native text preview — gUq descenders"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    @MainActor
     func testImageRotationDoesNotChangeTextAndTextOffersPortraitModes() {
         let app = XCUIApplication()
         app.launchArguments += ["-spotled.text", "HELLO"]

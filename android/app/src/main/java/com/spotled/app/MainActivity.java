@@ -20,9 +20,13 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.Settings;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.util.TypedValue;
 import android.view.View;
 import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -31,6 +35,7 @@ import android.widget.ImageView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -57,19 +62,36 @@ public final class MainActivity extends Activity {
     private static final String PREF_TEXT_ORIENTATION = "text_orientation";
     private static final String PREF_IMAGE_ROTATION = "image_rotation";
     private static final String PREF_IMAGE_FIT = "image_fit";
+    private static final String PREF_IMAGE_ZOOM = "image_zoom_percent";
+    private static final String PREF_IMAGE_PAN_X = "image_pan_x_percent";
+    private static final String PREF_IMAGE_PAN_Y = "image_pan_y_percent";
+    private static final String PREF_VERTICAL_IMAGE_SCROLL = "vertical_image_scroll";
     private static final String PREF_LAST_DEVICE_NAME = "last_device_name";
     private static final String PREF_LAST_DEVICE_ADDRESS = "last_device_address";
     private static final String PREF_TEXT_TIME_MS = "text_time_ms";
     private static final String PREF_NATIVE_TEXT_TIME_MS_LEGACY = "native_text_time_ms";
     private TextView statusView;
     private EditText textInput;
+    private ImageView imagePreviewView;
     private Spinner rotationSpinner;
     private Spinner fitSpinner;
     private Spinner textOrientationSpinner;
     private Spinner textEffectSpinner;
     private Spinner textColorSpinner;
+    private SeekBar imageZoomBar;
+    private SeekBar imagePanXBar;
+    private SeekBar imagePanYBar;
+    private TextView imageZoomValue;
+    private TextView imagePanXValue;
+    private TextView imagePanYValue;
+    private LinearLayout imageViewportControls;
+    private Switch verticalImageScrollSwitch;
+    private Uri selectedImageUri;
     private ImageView preview;
     private Button sendPreviewButton;
+    private Button stopImageScrollButton;
+    private boolean pendingVerticalScroll;
+    private boolean verticalScrollRunning;
     private Runnable pendingPreviewSend;
     private SpotLedBleClient ble;
     private final Handler previewHandler = new Handler(Looper.getMainLooper());
@@ -78,6 +100,12 @@ public final class MainActivity extends Activity {
     private int animatedPreviewFrameIndex;
     private boolean activityResumed;
     private boolean previewAnimationScheduled;
+    private float imageGestureScale = 1f;
+    private float imageGestureDx;
+    private float imageGestureDy;
+    private float imageGestureLastX;
+    private float imageGestureLastY;
+    private ScaleGestureDetector imageScaleDetector;
     private final ExecutorService imageImportExecutor = Executors.newSingleThreadExecutor();
     private Future<?> imageImportTask;
     private int imageImportGeneration;
@@ -86,11 +114,11 @@ public final class MainActivity extends Activity {
     private final Runnable previewAnimationTick = new Runnable() {
         @Override public void run() {
             previewAnimationScheduled = false;
-            if (!activityResumed || preview == null || animatedPreviewFrames == null
+            if (!activityResumed || imagePreviewView == null || animatedPreviewFrames == null
                     || animatedPreviewFrames.length < 2) return;
             animatedPreviewFrameIndex = (animatedPreviewFrameIndex + 1)
                     % animatedPreviewFrames.length;
-            preview.setImageBitmap(animatedPreviewFrames[animatedPreviewFrameIndex]);
+            imagePreviewView.setImageBitmap(animatedPreviewFrames[animatedPreviewFrameIndex]);
             startAnimatedPreview();
         }
     };
@@ -101,6 +129,16 @@ public final class MainActivity extends Activity {
         ble = new SpotLedBleClient(this, new SpotLedBleClient.Listener() {
             @Override public void onStatus(String message) {
                 if (statusView != null) statusView.setText(message);
+                if ((message.startsWith("Vertical image scroll stopped")
+                        || message.startsWith("Vertical scroll failed"))
+                        && stopImageScrollButton != null) {
+                    verticalScrollRunning = false;
+                    stopImageScrollButton.setVisibility(View.GONE);
+                    if (pendingPreviewSend != null) {
+                        sendPreviewButton.setText("Send scrolling image");
+                        sendPreviewButton.setEnabled(true);
+                    }
+                }
                 if (message.startsWith("Display not found.")
                         || message.contains("scan failed")
                         || message.contains("permission is missing")
@@ -185,7 +223,8 @@ public final class MainActivity extends Activity {
         textOrientationSpinner.setAdapter(new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_dropdown_item,
                 new String[] {"Landscape", "Portrait"}));
-        restoreAndRememberSpinner(textOrientationSpinner, PREF_TEXT_ORIENTATION, 2);
+        restoreAndRememberSpinner(textOrientationSpinner, PREF_TEXT_ORIENTATION, 2,
+                this::updateLiveTextPreview);
         page.addView(textOrientationSpinner);
 
         TextView effectLabel = new TextView(this);
@@ -211,7 +250,7 @@ public final class MainActivity extends Activity {
         page.addView(textColorSpinner);
 
         Button sendText = new Button(this);
-        sendText.setText("Preview text");
+        sendText.setText("Send text");
         sendText.setOnClickListener(view -> sendTextFrame());
         page.addView(sendText);
 
@@ -220,6 +259,20 @@ public final class MainActivity extends Activity {
         imageLabel.setTextSize(16);
         imageLabel.setPadding(0, dp(18), 0, dp(4));
         page.addView(imageLabel);
+        Button chooseImage = new Button(this);
+        chooseImage.setText("Choose image or GIF");
+        chooseImage.setOnClickListener(view -> openImagePicker());
+        page.addView(chooseImage);
+        imagePreviewView = new ImageView(this);
+        imagePreviewView.setAdjustViewBounds(true);
+        imagePreviewView.setBackgroundColor(Color.BLACK);
+        imagePreviewView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        imagePreviewView.setContentDescription("Image crop preview. Pinch to zoom and drag to pan.");
+        LinearLayout.LayoutParams imagePreviewParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(120));
+        imagePreviewParams.topMargin = dp(8);
+        page.addView(imagePreviewView, imagePreviewParams);
+        installImagePreviewGestures();
         TextView imageOptionsNote = new TextView(this);
         imageOptionsNote.setText("Rotation and fit apply to images only; choose text orientation in the Text section.");
         imageOptionsNote.setTextSize(13);
@@ -229,7 +282,8 @@ public final class MainActivity extends Activity {
         rotationSpinner.setAdapter(new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_dropdown_item,
                 new String[] {"0°", "90° clockwise", "180°", "270° clockwise"}));
-        restoreAndRememberSpinner(rotationSpinner, PREF_IMAGE_ROTATION, 4);
+        restoreAndRememberSpinner(rotationSpinner, PREF_IMAGE_ROTATION, 4,
+                this::reprocessSelectedImage);
         page.addView(rotationSpinner);
 
         fitSpinner = new Spinner(this);
@@ -237,19 +291,25 @@ public final class MainActivity extends Activity {
                 android.R.layout.simple_spinner_dropdown_item,
                 new String[] {"Contain (preserve all, may add padding)",
                         "Cover (fill, crop edges)", "Stretch (fill, distort)"}));
-        restoreAndRememberSpinner(fitSpinner, PREF_IMAGE_FIT, 3);
+        restoreAndRememberSpinner(fitSpinner, PREF_IMAGE_FIT, 3,
+                this::reprocessSelectedImage);
         page.addView(fitSpinner);
-
-        Button chooseImage = new Button(this);
-        chooseImage.setText("Choose image or GIF");
-        chooseImage.setOnClickListener(view -> openImagePicker());
-        page.addView(chooseImage);
+        addImageViewportControls(page);
 
         sendPreviewButton = new Button(this);
         sendPreviewButton.setText("Send preview");
         sendPreviewButton.setEnabled(false);
         sendPreviewButton.setOnClickListener(view -> sendPreparedPreview());
         page.addView(sendPreviewButton);
+
+        stopImageScrollButton = new Button(this);
+        stopImageScrollButton.setText("Stop vertical scroll");
+        stopImageScrollButton.setVisibility(View.GONE);
+        stopImageScrollButton.setOnClickListener(view -> {
+            stopImageScrollButton.setEnabled(false);
+            ble.cancelVerticalScroll();
+        });
+        page.addView(stopImageScrollButton);
 
         preview = new ImageView(this);
         preview.setAdjustViewBounds(true);
@@ -259,14 +319,183 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(160));
         previewParams.topMargin = dp(16);
         page.addView(preview, previewParams);
+        textInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                updateLiveTextPreview();
+            }
+            @Override public void afterTextChanged(Editable s) { }
+        });
+        textColorSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view,
+                    int position, long id) { updateLiveTextPreview(); }
+            @Override public void onNothingSelected(AdapterView<?> parent) { }
+        });
+        updateLiveTextPreview();
 
         TextView note = new TextView(this);
-        note.setText("Image Rotation/Fit affect images only. Text has Landscape and Portrait orientations; Portrait turns native 16×16 glyphs 270° clockwise and preserves the full message on the native scrolling path. Native text preview shows the initial viewport, not firmware marquee playback. GIF previews animate the same sampled frames sent to the display at a safe pace. Preview first, then send explicitly. Transfers replace the display; BLE connects only during a send, and an acknowledgment confirms receipt, not rendering.");
+        note.setText("Image Rotation/Fit affect images only. Text has Landscape and Portrait orientations; Portrait turns native 16×16 glyphs 270° clockwise and preserves the full message on the native scrolling path. Text preview updates live and Send text transmits immediately. Native preview shows the initial viewport, not firmware marquee playback. Images/GIFs have a separate preview then send step. Transfers replace the display; BLE connects only during a send, and an acknowledgment confirms receipt, not rendering.");
         note.setTextSize(13);
         note.setPadding(0, dp(12), 0, 0);
         page.addView(note);
 
         setContentView(scroll);
+    }
+
+    private void addImageViewportControls(LinearLayout page) {
+        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        verticalImageScrollSwitch = new Switch(this);
+        verticalImageScrollSwitch.setText("Loop vertical scroll (still images)");
+        verticalImageScrollSwitch.setChecked(preferences.getBoolean(PREF_VERTICAL_IMAGE_SCROLL, false));
+        page.addView(verticalImageScrollSwitch);
+        fitSpinner.setEnabled(!verticalImageScrollSwitch.isChecked());
+        TextView scrollHelp = new TextView(this);
+        scrollHelp.setText("Stretches to 64 pixels wide and scrolls through 16-row viewports with a 250 ms Scroll Up transition. GIFs use normal animation mode.");
+        scrollHelp.setTextSize(13);
+        page.addView(scrollHelp);
+
+        imageViewportControls = new LinearLayout(this);
+        imageViewportControls.setOrientation(LinearLayout.VERTICAL);
+        imageViewportControls.setVisibility(verticalImageScrollSwitch.isChecked() ? View.GONE : View.VISIBLE);
+        page.addView(imageViewportControls);
+
+        imageZoomValue = new TextView(this);
+        imageZoomBar = new SeekBar(this);
+        imageZoomBar.setMax(300); // 1.0× through 4.0× in 0.01× steps
+        imageZoomBar.setProgress(Math.max(0, Math.min(300,
+                preferences.getInt(PREF_IMAGE_ZOOM, 100) - 100)));
+        addViewportSeekBar(imageViewportControls, imageZoomValue, imageZoomBar, "Zoom");
+
+        imagePanXValue = new TextView(this);
+        imagePanXBar = new SeekBar(this);
+        imagePanXBar.setMax(200);
+        imagePanXBar.setProgress(Math.max(0, Math.min(200,
+                preferences.getInt(PREF_IMAGE_PAN_X, 0) + 100)));
+        addViewportSeekBar(imageViewportControls, imagePanXValue, imagePanXBar, "Pan left/right");
+
+        imagePanYValue = new TextView(this);
+        imagePanYBar = new SeekBar(this);
+        imagePanYBar.setMax(200);
+        imagePanYBar.setProgress(Math.max(0, Math.min(200,
+                preferences.getInt(PREF_IMAGE_PAN_Y, 0) + 100)));
+        addViewportSeekBar(imageViewportControls, imagePanYValue, imagePanYBar, "Pan up/down");
+        Button resetCrop = new Button(this);
+        resetCrop.setText("Reset crop");
+        resetCrop.setOnClickListener(view -> {
+            imageZoomBar.setProgress(0);
+            imagePanXBar.setProgress(100);
+            imagePanYBar.setProgress(100);
+            saveImageViewportPreferences();
+            updateViewportLabels();
+            reprocessSelectedImage();
+        });
+        imageViewportControls.addView(resetCrop);
+        updateViewportLabels();
+
+        verticalImageScrollSwitch.setOnCheckedChangeListener((button, checked) -> {
+            imageViewportControls.setVisibility(checked ? View.GONE : View.VISIBLE);
+            fitSpinner.setEnabled(!checked);
+            preferences.edit().putBoolean(PREF_VERTICAL_IMAGE_SCROLL, checked).apply();
+            reprocessSelectedImage();
+        });
+    }
+
+    private void addViewportSeekBar(LinearLayout parent, TextView value, SeekBar bar, String label) {
+        value.setText(label);
+        value.setTextSize(14);
+        parent.addView(value);
+        parent.addView(bar);
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                updateViewportLabels();
+                if (fromUser) saveImageViewportPreferences();
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) { }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                reprocessSelectedImage();
+            }
+        });
+    }
+
+    private void installImagePreviewGestures() {
+        imageScaleDetector = new ScaleGestureDetector(this,
+                new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                    @Override public boolean onScale(ScaleGestureDetector detector) {
+                        imageGestureScale = Math.max(0.25f, Math.min(4f,
+                                imageGestureScale * detector.getScaleFactor()));
+                        imagePreviewView.setScaleX(imageGestureScale);
+                        imagePreviewView.setScaleY(imageGestureScale);
+                        return true;
+                    }
+                });
+        imagePreviewView.setOnTouchListener((view, event) -> {
+            if (selectedImageUri == null || verticalImageScrollSwitch.isChecked()) return false;
+            view.getParent().requestDisallowInterceptTouchEvent(true);
+            imageScaleDetector.onTouchEvent(event);
+            float x = event.getPointerCount() > 1 ? imageScaleDetector.getFocusX() : event.getX();
+            float y = event.getPointerCount() > 1 ? imageScaleDetector.getFocusY() : event.getY();
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                case MotionEvent.ACTION_POINTER_DOWN:
+                    imageGestureLastX = x;
+                    imageGestureLastY = y;
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    imageGestureDx += x - imageGestureLastX;
+                    imageGestureDy += y - imageGestureLastY;
+                    imageGestureLastX = x;
+                    imageGestureLastY = y;
+                    imagePreviewView.setTranslationX(imageGestureDx);
+                    imagePreviewView.setTranslationY(imageGestureDy);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    float oldZoom = 1 + imageZoomBar.getProgress() / 100f;
+                    int width = Math.max(1, imagePreviewView.getWidth());
+                    int height = Math.max(1, imagePreviewView.getHeight());
+                    int newZoomProgress = Math.max(0, Math.min(300,
+                            Math.round(oldZoom * imageGestureScale * 100) - 100));
+                    imageZoomBar.setProgress(newZoomProgress);
+                    float baseZoom = oldZoom;
+                    imagePanXBar.setProgress(Math.max(0, Math.min(200,
+                            Math.round(imagePanXBar.getProgress() - imageGestureDx * 200f
+                                    / width / baseZoom))));
+                    imagePanYBar.setProgress(Math.max(0, Math.min(200,
+                            Math.round(imagePanYBar.getProgress() - imageGestureDy * 200f
+                                    / height / baseZoom))));
+                    imagePreviewView.setScaleX(1f);
+                    imagePreviewView.setScaleY(1f);
+                    imagePreviewView.setTranslationX(0f);
+                    imagePreviewView.setTranslationY(0f);
+                    imageGestureScale = 1f;
+                    imageGestureDx = 0;
+                    imageGestureDy = 0;
+                    saveImageViewportPreferences();
+                    updateViewportLabels();
+                    reprocessSelectedImage();
+                    view.getParent().requestDisallowInterceptTouchEvent(false);
+                    return true;
+                default:
+                    return true;
+            }
+        });
+    }
+
+    private void updateViewportLabels() {
+        if (imageZoomValue == null) return;
+        imageZoomValue.setText(String.format(java.util.Locale.ROOT, "Zoom %.2f×",
+                1 + imageZoomBar.getProgress() / 100.0));
+        imagePanXValue.setText("Pan left/right " + (imagePanXBar.getProgress() - 100) + "%");
+        imagePanYValue.setText("Pan up/down " + (imagePanYBar.getProgress() - 100) + "%");
+    }
+
+    private void saveImageViewportPreferences() {
+        if (imageZoomBar == null) return;
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putInt(PREF_IMAGE_ZOOM, 100 + imageZoomBar.getProgress())
+                .putInt(PREF_IMAGE_PAN_X, imagePanXBar.getProgress() - 100)
+                .putInt(PREF_IMAGE_PAN_Y, imagePanYBar.getProgress() - 100)
+                .apply();
     }
 
     private void applyStoredTheme() {
@@ -353,6 +582,7 @@ public final class MainActivity extends Activity {
                             .putInt(PREF_TEXT_TIME_MS, textTimeMs)
                             .apply();
                     dialog.dismiss();
+                    updateLiveTextPreview();
                     if (themeChanged) recreate();
                 }));
         dialog.show();
@@ -726,6 +956,11 @@ public final class MainActivity extends Activity {
     }
 
     private void restoreAndRememberSpinner(Spinner spinner, String preferenceKey, int optionCount) {
+        restoreAndRememberSpinner(spinner, preferenceKey, optionCount, null);
+    }
+
+    private void restoreAndRememberSpinner(Spinner spinner, String preferenceKey, int optionCount,
+                                          Runnable onSelectionChanged) {
         SharedPreferences preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         int selection = preferences.getInt(preferenceKey, 0);
         if (PREF_TEXT_ORIENTATION.equals(preferenceKey) && selection > 0) selection = 1;
@@ -735,6 +970,7 @@ public final class MainActivity extends Activity {
             @Override public void onItemSelected(AdapterView<?> parent, View view,
                     int position, long id) {
                 preferences.edit().putInt(preferenceKey, position).apply();
+                if (onSelectionChanged != null) onSelectionChanged.run();
             }
 
             @Override public void onNothingSelected(AdapterView<?> parent) { }
@@ -845,11 +1081,16 @@ public final class MainActivity extends Activity {
 
     private void sendTextFrame() {
         if (requireStatusServiceStopped()) return;
+        if (ble.isTransferInProgress()) {
+            statusView.setText("Stop the active image scroll before sending text.");
+            return;
+        }
         String message = textInput.getText().toString();
         if (message.trim().isEmpty()) {
             statusView.setText("Enter some text first.");
             return;
         }
+        updateLiveTextPreview();
         int effectMode = textEffectSpinner.getSelectedItemPosition();
         int textTimeMs = textTimeMs(getSharedPreferences(PREFS_NAME, MODE_PRIVATE));
         boolean rasterText = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -857,33 +1098,49 @@ public final class MainActivity extends Activity {
         int[] textOrientations = {0, 270};
         int textOrientation = textOrientations[textOrientationSpinner.getSelectedItemPosition()];
         int colorIndex = textColorSpinner.getSelectedItemPosition();
+        Runnable sendAction;
         if (textOrientation != 0) {
-            clearAnimatedPreview();
-            preview.setImageBitmap(renderNativeTextPreview(message, colorIndex, textOrientation));
-            preparePreview(() -> ble.sendRotatedNativeText(message, colorIndex,
-                            effectMode, textTimeMs, textOrientation),
-                    "Rotated native-font preview ready; scrolling retains the full text.",
-                    "Send text preview");
-            return;
+            sendAction = () -> ble.sendRotatedNativeText(message, colorIndex,
+                    effectMode, textTimeMs, textOrientation);
+        } else if (TextOutputMode.useNativeText(rasterText, textOrientation)) {
+            sendAction = () -> ble.sendNativeText(message, colorIndex, effectMode, textTimeMs);
+        } else {
+            CompactTextRaster.PanelFrames frames = CompactTextRaster.renderForPanel(
+                    message, colorIndex, textOrientation);
+            sendAction = () -> ble.sendRgbFrame(frames.wire.rgb,
+                    SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT,
+                    effectMode, textTimeMs);
         }
-        if (TextOutputMode.useNativeText(rasterText, textOrientation)) {
-            clearAnimatedPreview();
-            preview.setImageBitmap(renderNativeTextPreview(message, colorIndex));
-            preparePreview(() -> ble.sendNativeText(message, colorIndex, effectMode, textTimeMs),
-                    "Native-font preview ready.", "Send text preview");
-            return;
-        }
-        CompactTextRaster.PanelFrames frames = CompactTextRaster.renderForPanel(
-                message, colorIndex, textOrientation);
+        sendOrPromptForDisplay(sendAction, "Text ready to send.");
+    }
+
+    private void updateLiveTextPreview() {
+        if (preview == null || textInput == null) return;
         clearAnimatedPreview();
-        preview.setImageBitmap(bitmapFromRgb(frames.preview.rgb,
-                frames.preview.width, frames.preview.height));
-        preparePreview(() -> ble.sendRgbFrame(frames.wire.rgb,
-                        SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT,
-                        effectMode, textTimeMs),
-                textOrientation == 0 ? "Raster text preview ready."
-                        : "Rotated native-font text is ready in 64×16 cells.",
-                "Send text preview");
+        pendingPreviewSend = null;
+        if (sendPreviewButton != null) {
+            sendPreviewButton.setText("Send preview");
+            sendPreviewButton.setEnabled(false);
+        }
+        String message = textInput.getText().toString();
+        if (message.trim().isEmpty()) {
+            preview.setImageBitmap(Bitmap.createBitmap(SpotLedProtocol.SCREEN_WIDTH,
+                    SpotLedProtocol.SCREEN_HEIGHT, Bitmap.Config.ARGB_8888));
+            return;
+        }
+        int colorIndex = textColorSpinner.getSelectedItemPosition();
+        int[] orientations = {0, 270};
+        int textOrientation = orientations[textOrientationSpinner.getSelectedItemPosition()];
+        boolean rasterText = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(PREF_RASTER_TEXT, false);
+        if (textOrientation != 0 || TextOutputMode.useNativeText(rasterText, textOrientation)) {
+            preview.setImageBitmap(renderNativeTextPreview(message, colorIndex, textOrientation));
+        } else {
+            CompactTextRaster.PanelFrames frames = CompactTextRaster.renderForPanel(
+                    message, colorIndex, textOrientation);
+            preview.setImageBitmap(bitmapFromRgb(frames.preview.rgb,
+                    frames.preview.width, frames.preview.height));
+        }
     }
 
     private Bitmap renderNativeTextPreview(String text, int paletteIndex) {
@@ -913,8 +1170,13 @@ public final class MainActivity extends Activity {
 
     private void openImagePicker() {
         if (requireStatusServiceStopped()) return;
+        if (ble.isTransferInProgress()) {
+            statusView.setText("Stop the active image scroll before choosing another image.");
+            return;
+        }
         cancelImageImport();
         pendingPreviewSend = null;
+        pendingVerticalScroll = false;
         sendPreviewButton.setEnabled(false);
         if (Build.VERSION.SDK_INT >= 33) {
             Intent picker = new Intent(MediaStore.ACTION_PICK_IMAGES);
@@ -937,18 +1199,32 @@ public final class MainActivity extends Activity {
         if (requestCode != REQUEST_IMAGE || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         if (requireStatusServiceStopped()) return;
         Uri uri = data.getData();
+        selectedImageUri = uri;
+        processSelectedImage(uri);
+    }
+
+    private void reprocessSelectedImage() {
+        if (selectedImageUri != null) processSelectedImage(selectedImageUri);
+    }
+
+    private void processSelectedImage(Uri uri) {
         cancelImageImport();
         final int generation = imageImportGeneration;
         final int rotationDegrees = rotationSpinner.getSelectedItemPosition() * 90;
         String[] fitModes = {"contain", "cover", "stretch"};
         final String fitMode = fitModes[fitSpinner.getSelectedItemPosition()];
+        final double zoom = 1 + imageZoomBar.getProgress() / 100.0;
+        final double panX = (imagePanXBar.getProgress() - 100) / 100.0;
+        final double panY = (imagePanYBar.getProgress() - 100) / 100.0;
+        final boolean verticalScroll = verticalImageScrollSwitch.isChecked();
         statusView.setText("Preparing image preview…");
+        sendPreviewButton.setEnabled(false);
         imageImportTask = imageImportExecutor.submit(() -> {
             ImageImportProcessor.Result result = null;
             Exception failure = null;
             try {
                 result = ImageImportProcessor.process(getApplicationContext(), uri,
-                        rotationDegrees, fitMode);
+                        rotationDegrees, fitMode, zoom, panX, panY, verticalScroll);
             } catch (Exception exception) { failure = exception; }
             ImageImportProcessor.Result completed = result;
             Exception error = failure;
@@ -963,28 +1239,44 @@ public final class MainActivity extends Activity {
                     statusView.setText("Could not decode selected image.");
                     return;
                 }
-                if (completed.animated && completed.frames.length > 1) {
+                if (completed.animated && completed.frames.length > 1
+                        && !completed.verticalScroll) {
                     setAnimatedPreviewFrames(
                             bitmapFromRgb(completed.frames[0], SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT),
                             bitmapFromRgb(completed.frames[1], SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT),
                             completed.intervalMs);
                 } else {
                     clearAnimatedPreview();
-                    preview.setImageBitmap(bitmapFromRgb(completed.frames[0],
+                    imagePreviewView.setImageBitmap(bitmapFromRgb(completed.frames[0],
                             SpotLedProtocol.SCREEN_WIDTH, SpotLedProtocol.SCREEN_HEIGHT));
                 }
+                imagePreviewView.setScaleX(1f);
+                imagePreviewView.setScaleY(1f);
+                imagePreviewView.setTranslationX(0f);
+                imagePreviewView.setTranslationY(0f);
+                pendingVerticalScroll = completed.verticalScroll;
                 preparePreview(
                         () -> {
-                            if (completed.animated)
+                            if (completed.verticalScroll)
+                                ble.sendVerticalScroll(completed.frames, SpotLedProtocol.SCREEN_WIDTH,
+                                        SpotLedProtocol.SCREEN_HEIGHT, completed.intervalMs,
+                                        completed.effectMode);
+                            else if (completed.animated)
                                 ble.sendRgbAnimation(completed.frames, SpotLedProtocol.SCREEN_WIDTH,
-                                        SpotLedProtocol.SCREEN_HEIGHT, completed.intervalMs);
+                                        SpotLedProtocol.SCREEN_HEIGHT, completed.intervalMs,
+                                        completed.effectMode);
                             else ble.sendRgbFrame(completed.frames[0], SpotLedProtocol.SCREEN_WIDTH,
                                     SpotLedProtocol.SCREEN_HEIGHT, 0, 500);
-                        }, completed.animated ? "GIF preview: showing " + completed.frames.length + " of "
+                        }, completed.verticalScroll
+                                ? "Vertical scroll preview: " + completed.frames.length + " viewports at 250 ms/step; send to start the loop."
+                                : verticalScroll && !completed.verticalScroll
+                                ? "Image is not taller than the display; vertical scrolling is not needed."
+                                : completed.animated ? "GIF preview: showing " + completed.frames.length + " of "
                                 + completed.originalFrameCount + " source frames at "
                                 + completed.intervalMs + " ms/frame."
                                 : "Image preview ready.",
-                        completed.animated ? "Send GIF preview" : "Send image preview");
+                        completed.verticalScroll ? "Send scrolling image"
+                                : completed.animated ? "Send GIF preview" : "Send image preview");
             });
         });
     }
@@ -1006,6 +1298,19 @@ public final class MainActivity extends Activity {
         if (requireStatusServiceStopped()) return;
         Runnable sendAction = pendingPreviewSend;
         if (sendAction == null) return;
+        if (pendingVerticalScroll) {
+            pendingVerticalScroll = false;
+            pendingPreviewSend = sendAction;
+            sendPreviewButton.setText("Vertical scroll running…");
+            sendPreviewButton.setEnabled(false);
+            sendOrPromptForDisplay(() -> {
+                verticalScrollRunning = true;
+                stopImageScrollButton.setEnabled(true);
+                stopImageScrollButton.setVisibility(View.VISIBLE);
+                sendAction.run();
+            }, "Vertical scroll ready to start.");
+            return;
+        }
         pendingPreviewSend = null;
         sendPreviewButton.setEnabled(false);
         sendOrPromptForDisplay(sendAction, "Preview ready.");
@@ -1024,7 +1329,7 @@ public final class MainActivity extends Activity {
         animatedPreviewFrames = new Bitmap[] {first, second};
         animatedPreviewIntervalMs = Math.max(250, Math.min(1000, intervalMs));
         animatedPreviewFrameIndex = 0;
-        preview.setImageBitmap(first);
+        imagePreviewView.setImageBitmap(first);
         startAnimatedPreview();
     }
 
@@ -1056,10 +1361,12 @@ public final class MainActivity extends Activity {
     @Override protected void onPause() {
         activityResumed = false;
         stopAnimatedPreview();
+        if (verticalScrollRunning) ble.cancelVerticalScroll();
         super.onPause();
     }
 
     @Override protected void onDestroy() {
+        if (verticalScrollRunning) ble.cancelVerticalScroll();
         cancelImageImport();
         imageImportExecutor.shutdownNow();
         clearAnimatedPreview();

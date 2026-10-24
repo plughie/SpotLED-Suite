@@ -83,8 +83,19 @@ class CliTests(unittest.TestCase):
         with patch.object(sys, "argv", ["SPOTLED-v3.py", "HELLO", "--text-orientation", "270"]):
             with self.assertRaises(SystemExit):
                 spotled.parse_cli_args()
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "--image", "a.png",
+                                         "--zoom", "2", "--pan-x", "-0.5"]):
+            args = spotled.parse_cli_args()
+            self.assertEqual((args.zoom, args.pan_x, args.pan_y), (2.0, -0.5, 0.0))
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "--image", "a.png",
+                                         "--vertical-scroll", "--zoom", "2"]):
+            with self.assertRaises(SystemExit):
+                spotled.parse_cli_args()
         with patch.object(sys, "argv", ["SPOTLED-v3.py", "--image", "a.png", "--rotation", "270"]):
             self.assertEqual(spotled.parse_cli_args().rotation, 270)
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "--image", "a.png",
+                                         "--vertical-scroll"]):
+            self.assertTrue(spotled.parse_cli_args().vertical_scroll)
         with patch.object(sys, "argv", ["SPOTLED-v3.py", "HELLO", "--rotation", "270"]):
             with self.assertRaises(SystemExit):
                 spotled.parse_cli_args()
@@ -406,6 +417,28 @@ class ObjectEncodingTests(unittest.TestCase):
         fifth_glyph_offset = 9 + 4 * 47
         self.assertEqual(word_stock[fifth_glyph_offset:fifth_glyph_offset + 47], rotated)
         self.assertEqual(int.from_bytes(word_stock[6:8], "big"), 5)
+
+    def test_lowercase_descenders_reach_the_last_cell_row(self):
+        for char in "gjpqy":
+            with self.subTest(char=char):
+                glyph = spotled.make_font_object(char)
+                self.assertNotEqual(glyph[44:46], b"\x00\x00")
+                self.assertNotEqual(glyph[42:44], b"\x00\x00")
+                self.assertEqual(glyph[46], spotled.check_sum(glyph[:46]))
+                self.assertEqual(int.from_bytes(glyph[11:13], "big"), ord(char))
+                rows = [glyph[14 + row * 2:16 + row * 2] for row in range(16)]
+                self.assertEqual(next(i for i, row in enumerate(rows) if row != b"\x00\x00"),
+                                 1 if char == "j" else 3 if char == "g" else 4)
+                if char == "g":
+                    self.assertEqual([int.from_bytes(rows[y], "big") for y in (12, 13, 14, 15)],
+                                     [0x0100, 0x0300, 0x0600, 0x0C00])
+        width, height, preview = spotled.render_native_text_preview("gpjy")
+        self.assertEqual((width, height), (64, 16))
+        for character_index in range(4):
+            row_start = (15 * width + character_index * 16) * 3
+            row = preview[row_start:row_start + 16 * 3]
+            self.assertTrue(any(row[offset:offset + 3] != b"\x00\x00\x00"
+                                for offset in range(0, len(row), 3)))
 
     def test_native_text_rejects_non_bmp_and_unpaired_surrogates(self):
         for text in (SHARED_FIXTURES["native_text_unicode"]["non_bmp_example"], "\ud800"):
@@ -760,6 +793,48 @@ class ObjectEncodingTests(unittest.TestCase):
 
         _, _, stretched = spotled.fit_rgb_pixels(4, 2, source, 2, 2, fit="stretch")
         self.assertEqual(stretched, colors[1] + colors[3] + colors[1] + colors[3])
+
+    def test_zoom_pan_selects_left_and_right_viewports(self):
+        red, blue = bytes((255, 0, 0)), bytes((0, 0, 255))
+        source = red + blue
+        _, _, left = spotled.fit_rgb_pixels(2, 1, source, 2, 1,
+                                            fit="stretch", zoom=2, pan_x=-1)
+        _, _, right = spotled.fit_rgb_pixels(2, 1, source, 2, 1,
+                                             fit="stretch", zoom=2, pan_x=1)
+        self.assertEqual(left, red + red)
+        self.assertEqual(right, blue + blue)
+
+    def test_image_zoom_and_pan_options_parse_and_validate(self):
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "--image", "a.png",
+                                         "--zoom", "2", "--pan-x", "-0.5", "--pan-y", "0.25"]):
+            args = spotled.parse_cli_args()
+        self.assertEqual((args.zoom, args.pan_x, args.pan_y), (2.0, -0.5, 0.25))
+        with patch.object(sys, "argv", ["SPOTLED-v3.py", "--image", "a.png",
+                                         "--vertical-scroll", "--pan-y", "0.2"]):
+            with self.assertRaises(SystemExit):
+                spotled.parse_cli_args()
+
+    def test_vertical_scroll_creates_adjacent_viewports_from_top_to_bottom(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tall.png"
+            image = Image.new("RGB", (16, 32))
+            for y in range(32):
+                color = (255, 0, 0) if y < 16 else (0, 0, 255)
+                for x in range(16): image.putpixel((x, y), color)
+            image.save(path)
+            frames = spotled.load_vertical_scroll_frames(path)
+        self.assertEqual(len(frames), 8)
+        top, bottom = frames[0][0], frames[-1][0]
+        self.assertEqual(top[:3], bytes((255, 0, 0)))
+        self.assertEqual(bottom[:3], bytes((0, 0, 255)))
+        self.assertEqual(len(top), 64 * 16 * 3)
+        payload, sent, _ = spotled.build_animation_transfer(
+            frames, max_frames=2, receive_capacity=7280, total_duration_ms=1000,
+            effect_mode=spotled.text_effect_mode("up"),
+        )
+        self.assertEqual(sent, 2)
+        self.assertIn(spotled.build_object(8, bytes((spotled.text_effect_mode("up"),))), payload)
 
     def test_contain_downscale_does_not_drop_a_sparse_marker(self):
         source = bytearray(16 * 64 * 3)

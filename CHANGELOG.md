@@ -3,6 +3,36 @@
 Notable project changes are recorded here. Older implementation and validation
 notes are preserved in [PROJECT_HISTORY.md](PROJECT_HISTORY.md).
 
+## [0.19.8] - 2026-10-23
+
+- Add mobile pinch-to-zoom and drag-to-pan on the image preview. Keep the
+  transformed preview visible above image options while recalculating; provide
+  a one-tap crop reset. Python retains matching `--zoom`/`--pan-x`/`--pan-y`
+  transforms. Add a still-image vertical loop that streams
+  adjacent 16-row viewports at 250 ms with Scroll Up; Android/iOS provide
+  Stop/Cancel, and Python stops with Ctrl-C. GIFs keep their standard bounded
+  animation path.
+- Match iOS text interaction on Android: update the native/raster preview as
+  text and options change, and make Send text transmit that current preview in
+  one step. Image/GIF preview and send remain separate.
+- Shift the captured g/j/p/q/y glyphs upward and extend their descenders into
+  the final 16×16 cell row. Give lowercase g a connected four-row curl. Keep
+  codepoints unchanged across Python, Android and iOS; updated regression tests
+  verify the final-row pixels and checksums.
+- User reviewed the actual iPhone `qgyj` preview after the final-row descender
+  extension and said it should work. No panel content was sent; physical display
+  rendering remains open for validation.
+- Android contributor build v0.19.8 (versionCode 32) also includes live text
+  preview, pan/zoom, and the still-image vertical scroll loop. Verification:
+  Python 67 tests, MQTT 38 tests, 48 Android JVM tests, `lintRelease`, and
+  `assembleRelease` pass. The initial iOS simulator run passed all 28 tests but
+  reported a SwiftUI frame warning. A bounded-frame follow-up compiles and is
+  installed; its focused UI rerun stalled while saving the result bundle, so
+  that rerun is unverified. No iOS release artifact is produced.
+  Physical image-gesture validation remains pending.
+
+## [Unreleased]
+
 ## [0.19.7] - 2026-10-23
 
 - Replace text's 0°/90°/270° selector with Landscape/Portrait. Portrait uses

@@ -27,3 +27,19 @@ Consequently photographs and fine patterns may differ slightly across platforms;
 rotation, contain/cover/stretch geometry, black transparency matte, and final
 64×16 dimensions are kept consistent. This is an intentional trade-off, not a
 claim of pixel-identical previews.
+
+## Pan/zoom viewport and vertical scrolling
+
+Android and iOS expose 1–4× image zoom and normalized X/Y pan controls
+(-1 to +1; zero centers the crop). Python provides matching `--zoom`, `--pan-x`,
+and `--pan-y` options. The selected preview uses the same 64×16 transform as its
+send.
+
+The optional still-image vertical loop first fits the image to 64 pixels wide,
+preserving aspect ratio up to 4,096 rows, then creates adjacent 16-row viewports.
+The foreground sender streams one viewport at a time with the native Scroll Up
+transition at 250 ms/step and loops to the top. BLE stays connected only while
+this explicit mode runs; Android/iOS expose cancellation, and Python stops with
+Ctrl-C. Animated GIFs do not combine with this mode. Each update fits the live
+one-frame receive limit rather than packaging the whole scroll as one animation.
+Physical transition smoothness and loop-wrap behavior remain to be validated.

@@ -170,14 +170,49 @@ final class SpotLedBLEManager: NSObject, ObservableObject {
         }
     }
 
-    func sendImageFrames(_ frames: [[UInt8]], intervalMs: UInt16) async {
+    func sendImageFrames(_ frames: [[UInt8]], intervalMs: UInt16,
+                         effectMode: UInt8 = 0) async {
         do {
-            let payload = try SpotLEDProtocol.buildRGBAnimationPayload(frames, intervalMs: intervalMs)
+            let payload = try SpotLEDProtocol.buildRGBAnimationPayload(
+                frames, intervalMs: intervalMs, effectMode: effectMode)
             try await sendUsingSelectedDisplay { sessionID in
                 let capabilities = try await self.queryCapabilities(sessionID: sessionID)
                 try SpotLEDProtocol.validateRGB(capabilities, frameCount: frames.count,
                                                 payloadBytes: payload.count)
                 try await self.transfer(payload, sessionID: sessionID)
+            }
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func sendVerticalScrollFrames(_ frames: [[UInt8]], intervalMs: UInt16 = 250) async {
+        guard frames.count > 1 else {
+            status = "The selected image is not taller than the display."
+            return
+        }
+        do {
+            let preflight = try SpotLEDProtocol.buildRGBFramePayload(
+                frames[0], intervalMs: intervalMs, effectMode: 1)
+            try await sendUsingSelectedDisplay { sessionID in
+                let capabilities = try await self.queryCapabilities(sessionID: sessionID)
+                try SpotLEDProtocol.validateRGB(capabilities, frameCount: 1,
+                                                payloadBytes: preflight.count)
+                self.status = "Vertical image scroll running; use Cancel transfer to stop."
+                while true {
+                    for frame in frames {
+                        try self.checkCancellation(sessionID)
+                        let payload = try SpotLEDProtocol.buildRGBFramePayload(
+                            frame, intervalMs: intervalMs, effectMode: 1)
+                        try await self.transfer(payload, sessionID: sessionID)
+                        do {
+                            try await Task.sleep(nanoseconds: UInt64(intervalMs) * 1_000_000)
+                        } catch {
+                            try self.checkCancellation(sessionID)
+                            throw error
+                        }
+                    }
+                }
             }
         } catch {
             status = error.localizedDescription

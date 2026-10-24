@@ -164,9 +164,11 @@ enum SpotLEDProtocol {
         return payload
     }
 
-    static func buildRGBAnimationPayload(_ frames: [[UInt8]], intervalMs: UInt16) throws -> [UInt8] {
+    static func buildRGBAnimationPayload(_ frames: [[UInt8]], intervalMs: UInt16,
+                                         effectMode: UInt8 = 0) throws -> [UInt8] {
         guard !frames.isEmpty, frames.count <= Int(UInt16.max),
-              frames.allSatisfy({ $0.count == width * height * 3 }) else {
+              frames.allSatisfy({ $0.count == width * height * 3 }),
+              effectMode <= 7 else {
             throw SpotLEDProtocolError.invalidFrame
         }
         var frameObjects: [UInt8] = []
@@ -179,7 +181,7 @@ enum SpotLEDProtocol {
             frameObjects.append(contentsOf: object(id: 0x60, content: content))
         }
         let timing = object(id: 7, content: [0, UInt8(intervalMs >> 8), UInt8(intervalMs & 0xff)])
-        let effect = object(id: 8, content: [0])
+        let effect = object(id: 8, content: [effectMode])
         let count = [UInt8(frames.count >> 8), UInt8(frames.count & 0xff)]
         let animation = objectWithFollow(id: 11, content: count,
                                          follow: frameObjects + timing + effect)

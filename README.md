@@ -36,7 +36,12 @@ python SPOTLED-v3.py "Hello" white left
 
 Text orientation is selected with `--text-orientation landscape|portrait`;
 Portrait turns native glyphs 270° clockwise and preserves firmware scrolling.
-`--rotation` remains an image-only option and supports 0°, 90°, 180° and 270°.
+Image viewport framing supports `--zoom 1..4`, `--pan-x -1..1`, and
+`--pan-y -1..1`; zero centers the crop. Still-image `--vertical-scroll` loops
+through tall 64-pixel-wide content using successive 16-row viewports and the
+display's Scroll Up transition. It keeps BLE connected while running; press
+Ctrl-C to stop. `--rotation` remains image-only and supports 0°, 90°, 180° and
+270°.
 
 Send a still image or animated GIF:
 
@@ -106,29 +111,33 @@ weather topic. See the [MQTT guide](SpotLED-MQTT/README.md) for all options.
 ### Android Companion
 
 Download and sideload the latest [SpotLED-Companion APK
-(v0.19.7)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.7/SpotLED-Companion.apk).
+(v0.19.8)](https://github.com/plughie/SpotLED-Suite/releases/download/v0.19.8/SpotLED-Companion.apk).
 The APK is signed for contributor sideloading, not production distribution via
 an app store.
 
 ## Current work state
 
-Android 0.19.7 (versionCode 31) is the latest contributor APK. Python (63 tests),
-MQTT (38 tests), Android (44 JVM tests, lint and release build) pass. Portrait
-text now has only Landscape/Portrait choices; Portrait turns native glyphs 270°
+Android 0.19.8 (versionCode 32) is the latest contributor APK. Current source
+validation passes Python (67 tests), MQTT (38 tests), and Android (48 JVM tests,
+lint and release build). Portrait text has only Landscape/Portrait choices;
+Portrait turns native glyphs 270°
 clockwise and retains native marquee scrolling. The user confirmed the glyph
 direction on iOS. Full-scroll behavior and Android/Python physical confirmation
-remain open, along with live capability-query checks; see [TODO.md](TODO.md).
+remain open, along with live capability-query checks and physical image-scroll
+validation; see [TODO.md](TODO.md).
 
 Android image/GIF decoding runs on a cancellable worker, with limits on encoded
-input/decode size and all EXIF orientations applied. Android and iOS separate
-preview from sending; native previews show the initial viewport. GIF timing,
-resampling, and disposal details are in [docs/image-processing.md](docs/image-processing.md).
+input/decode size and all EXIF orientations applied. Android and iOS text
+previews update live and Send text sends the current preview immediately; native
+previews show the initial viewport. Images/GIFs keep separate preview and send
+actions. GIF timing, resampling, and disposal details are in
+[docs/image-processing.md](docs/image-processing.md).
 The Android foreground service and Python bridge expose bounded queue/drop
 counts and weather freshness. Android release APKs use a local debug signing
 identity for contributor sideloading, not production distribution. Owner-key
 migration guidance is in [docs/android-signing-migration.md](docs/android-signing-migration.md).
 
-The current iOS development build (0.19.6, build 30) is installed on the paired
+The current iOS development build (0.19.7, build 31) is installed on the paired
 iPhone. This is not an iOS release; contributors still build and sign their own
 app.
 

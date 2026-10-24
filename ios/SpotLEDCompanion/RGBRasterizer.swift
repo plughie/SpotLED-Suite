@@ -40,6 +40,14 @@ struct RGBTextFrames: Sendable {
     let wire: RGBFrame
 }
 
+struct RGBImageFrames: Sendable {
+    let frames: [RGBFrame]
+    let intervalMs: UInt16
+    let originalFrameCount: Int
+    let effectMode: UInt8
+    let verticalScroll: Bool
+}
+
 enum RGBRasterizer {
     static func textFrames(_ text: String, color: SpotLEDTextColor,
                            orientation: TextPanelOrientation) -> RGBTextFrames {
@@ -85,8 +93,9 @@ enum RGBRasterizer {
         return UInt16(max(250, min(1000, average)))
     }
 
-    static func imageFrames(_ data: Data, rotation: Int, fit: ImageFit)
-        throws -> (frames: [RGBFrame], intervalMs: UInt16, originalFrameCount: Int) {
+    static func imageFrames(_ data: Data, rotation: Int, fit: ImageFit,
+                            zoom: Double = 1, panX: Double = 0, panY: Double = 0,
+                            verticalScroll: Bool = false) throws -> RGBImageFrames {
         try checkCancellation()
         guard data.count <= 50_000_000 else { throw SpotLEDProtocolError.transferTooLarge }
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
@@ -94,6 +103,9 @@ enum RGBRasterizer {
         }
         let frameCount = CGImageSourceGetCount(source)
         guard frameCount > 0 else { throw SpotLEDProtocolError.invalidFrame }
+        if verticalScroll && frameCount > 1 {
+            throw SpotLEDProtocolError.transport("Vertical scroll mode supports still images only; turn it off for animated GIFs.")
+        }
 
         var delays: [Double] = []
         for index in 0..<frameCount {
@@ -132,13 +144,26 @@ enum RGBRasterizer {
             }
             try checkCancellation()
             let normalized = UIImage(cgImage: oriented, scale: 1, orientation: .up)
-            frames.append(try imageFrame(normalized, rotation: rotation, fit: fit))
+            if verticalScroll {
+                let scrollFrames = try verticalScrollFrames(normalized, rotation: rotation)
+                frames.append(contentsOf: scrollFrames)
+            } else {
+                frames.append(try imageFrame(normalized, rotation: rotation, fit: fit,
+                                             zoom: zoom, panX: panX, panY: panY))
+            }
+        }
+        if verticalScroll {
+            return RGBImageFrames(frames: frames, intervalMs: 250, originalFrameCount: frameCount,
+                                  effectMode: frames.count > 1 ? 1 : 0,
+                                  verticalScroll: frames.count > 1)
         }
         let interval = frameCount > 1
             ? gifIntervalMs(totalDurationMs: totalDuration * 1000,
                             sentFrameCount: sampleIndices.count)
             : 500
-        return (frames, interval, frameCount)
+        return RGBImageFrames(frames: frames, intervalMs: interval,
+                              originalFrameCount: frameCount, effectMode: 0,
+                              verticalScroll: false)
     }
 
     static func nativeTextFrame(_ text: String, color: SpotLEDTextColor) -> RGBFrame {
@@ -195,7 +220,8 @@ enum RGBRasterizer {
         return fitPixels(pixels, width: sourceWidth, height: 5, rotation: rotation, fit: fit)
     }
 
-    static func imageFrame(_ image: UIImage, rotation: Int, fit: ImageFit) throws -> RGBFrame {
+    static func imageFrame(_ image: UIImage, rotation: Int, fit: ImageFit,
+                           zoom: Double = 1, panX: Double = 0, panY: Double = 0) throws -> RGBFrame {
         guard let sourceCG = image.cgImage else { throw SpotLEDProtocolError.invalidFrame }
         let sourceSize = CGSize(width: sourceCG.width, height: sourceCG.height)
         let format = UIGraphicsImageRendererFormat()
@@ -209,7 +235,37 @@ enum RGBRasterizer {
         guard let cg = normalized.cgImage else { throw SpotLEDProtocolError.invalidFrame }
         let sourceBytes = try rgbBytes(from: cg)
         return fitPixels(sourceBytes, width: cg.width, height: cg.height,
-                         rotation: rotation, fit: fit)
+                         rotation: rotation, fit: fit, zoom: zoom, panX: panX, panY: panY)
+    }
+
+    private static func verticalScrollFrames(_ image: UIImage, rotation: Int) throws -> [RGBFrame] {
+        guard let cg = image.cgImage else { throw SpotLEDProtocolError.invalidFrame }
+        let source = rotate(try rgbBytes(from: cg), width: cg.width, height: cg.height,
+                            degrees: rotation)
+        return verticalScrollFrames(source.bytes, width: source.width, height: source.height)
+    }
+
+    static func verticalScrollFrames(_ source: [UInt8], width: Int, height: Int)
+        -> [RGBFrame] {
+        let scaledHeight = min(4096, max(RGBFrame.screenHeight,
+            Int((Double(height) * Double(RGBFrame.screenWidth) / Double(width)).rounded())))
+        if scaledHeight <= RGBFrame.screenHeight {
+            return [fitPixels(source, width: width, height: height,
+                              rotation: 0, fit: .contain)]
+        }
+        let tall = fitPixels(source, width: width, height: height,
+                             rotation: 0, fit: .stretch,
+                             targetWidth: RGBFrame.screenWidth, targetHeight: scaledHeight)
+        let rowBytes = RGBFrame.screenWidth * 3
+        let frameBytes = rowBytes * RGBFrame.screenHeight
+        let lastOffset = scaledHeight - RGBFrame.screenHeight
+        var offsets = Array(stride(from: 0, through: lastOffset, by: RGBFrame.screenHeight))
+        if offsets.last != lastOffset { offsets.append(lastOffset) }
+        return offsets.map { y in
+            let offset = y * rowBytes
+            return RGBFrame(width: RGBFrame.screenWidth, height: RGBFrame.screenHeight,
+                            bytes: Array(tall.bytes[offset..<(offset + frameBytes)]))
+        }
     }
 
     static func previewImage(_ frame: RGBFrame) -> UIImage? {
@@ -270,11 +326,13 @@ enum RGBRasterizer {
         }
     }
 
-    private static func fitPixels(_ source: [UInt8], width: Int, height: Int,
+    static func fitPixels(_ source: [UInt8], width: Int, height: Int,
                                   rotation: Int, fit: ImageFit,
                                   targetWidth: Int = RGBFrame.screenWidth,
-                                  targetHeight: Int = RGBFrame.screenHeight) -> RGBFrame {
+                                  targetHeight: Int = RGBFrame.screenHeight,
+                                  zoom: Double = 1, panX: Double = 0, panY: Double = 0) -> RGBFrame {
         let rotated = rotate(source, width: width, height: height, degrees: rotation)
+        precondition((1...4).contains(zoom) && (-1...1).contains(panX) && (-1...1).contains(panY))
         let scale = fit == .stretch ? 0 : (fit == .contain
             ? min(Double(targetWidth) / Double(rotated.width), Double(targetHeight) / Double(rotated.height))
             : max(Double(targetWidth) / Double(rotated.width), Double(targetHeight) / Double(rotated.height)))
@@ -287,8 +345,10 @@ enum RGBRasterizer {
             scaledWidth = max(targetWidth, scaledWidth)
             scaledHeight = max(targetHeight, scaledHeight)
         }
-        let left = (targetWidth - scaledWidth) / 2
-        let top = (targetHeight - scaledHeight) / 2
+        scaledWidth = max(1, Int((Double(scaledWidth) * zoom).rounded()))
+        scaledHeight = max(1, Int((Double(scaledHeight) * zoom).rounded()))
+        let left = Int((Double(targetWidth - scaledWidth) * (panX + 1) / 2).rounded())
+        let top = Int((Double(targetHeight - scaledHeight) * (panY + 1) / 2).rounded())
         var output = [UInt8](repeating: 0, count: targetWidth * targetHeight * 3)
         for y in 0..<targetHeight {
             let scaledY = y - top

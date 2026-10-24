@@ -158,6 +158,29 @@ final class SpotLEDProtocolTests: XCTestCase {
         }
     }
 
+    func testLowercaseDescendersReachLastCellRowAndPreserveCodepoints() {
+        for character: UInt8 in [103, 106, 112, 113, 121] {
+            let glyph = SpotLEDProtocol.nativeFontObject(character)
+            XCTAssertTrue(glyph[44] != 0 || glyph[45] != 0)
+            XCTAssertTrue(glyph[42] != 0 || glyph[43] != 0)
+            XCTAssertEqual(UInt16(glyph[11]) << 8 | UInt16(glyph[12]), UInt16(character))
+            let firstInkRow = (0..<16).first { glyph[14 + $0 * 2] != 0 || glyph[15 + $0 * 2] != 0 }
+            XCTAssertEqual(firstInkRow, Optional(character == 106 ? 1 : character == 103 ? 3 : 4))
+            if character == 103 {
+                XCTAssertEqual(UInt16(glyph[40]) << 8 | UInt16(glyph[41]), 0x0300)
+                XCTAssertEqual(UInt16(glyph[42]) << 8 | UInt16(glyph[43]), 0x0600)
+                XCTAssertEqual(UInt16(glyph[44]) << 8 | UInt16(glyph[45]), 0x0c00)
+            }
+        }
+        let preview = RGBRasterizer.nativeTextFrame("gpjy", color: .white)
+        let bottomRow = (15 * 64 * 3)..<(16 * 64 * 3)
+        let bottomBytes = Array(preview.bytes[bottomRow])
+        for characterIndex in 0..<4 {
+            let range = (characterIndex * 16 * 3)..<((characterIndex + 1) * 16 * 3)
+            XCTAssertTrue(bottomBytes[range].contains { $0 != 0 })
+        }
+    }
+
     func testCapitalINativeGlyphHasSerifs() {
         let glyph = SpotLEDProtocol.nativeFontObject(UInt8(ascii: "I"))
         func row(_ y: Int) -> UInt16 {

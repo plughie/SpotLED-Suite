@@ -41,11 +41,19 @@ final class RgbTransforms {
 
     static Frame fit(byte[] rgb, int width, int height, int targetWidth,
                      int targetHeight, String mode) {
+        return fit(rgb, width, height, targetWidth, targetHeight, mode, 1.0, 0.0, 0.0);
+    }
+
+    static Frame fit(byte[] rgb, int width, int height, int targetWidth,
+                     int targetHeight, String mode, double zoom,
+                     double panX, double panY) {
         requireFrame(rgb, width, height);
         if (targetWidth <= 0 || targetHeight <= 0)
             throw new IllegalArgumentException("Target dimensions must be positive");
         if (!mode.equals("contain") && !mode.equals("cover") && !mode.equals("stretch"))
             throw new IllegalArgumentException("Fit must be contain, cover, or stretch");
+        if (zoom < 1 || zoom > 4 || panX < -1 || panX > 1 || panY < -1 || panY > 1)
+            throw new IllegalArgumentException("Zoom must be 1×–4× and pan must be -1–1");
 
         double scale = mode.equals("stretch") ? 0 :
                 (mode.equals("contain")
@@ -60,10 +68,12 @@ final class RgbTransforms {
             scaledWidth = Math.max(targetWidth, scaledWidth);
             scaledHeight = Math.max(targetHeight, scaledHeight);
         }
+        scaledWidth = Math.max(1, (int) Math.floor(scaledWidth * zoom + 0.5));
+        scaledHeight = Math.max(1, (int) Math.floor(scaledHeight * zoom + 0.5));
 
         byte[] output = new byte[targetWidth * targetHeight * 3]; // black padding
-        int left = (targetWidth - scaledWidth) / 2;
-        int top = (targetHeight - scaledHeight) / 2;
+        int left = (int) Math.floor((targetWidth - scaledWidth) * (panX + 1) / 2 + 0.5);
+        int top = (int) Math.floor((targetHeight - scaledHeight) * (panY + 1) / 2 + 0.5);
         for (int y = 0; y < targetHeight; y++) {
             int scaledY = y - top;
             if (scaledY < 0 || scaledY >= scaledHeight) continue;
@@ -78,6 +88,25 @@ final class RgbTransforms {
             }
         }
         return new Frame(targetWidth, targetHeight, output);
+    }
+
+    static Frame[] verticalScroll(byte[] rgb, int width, int height) {
+        requireFrame(rgb, width, height);
+        int scaledHeight = Math.min(ImageImportPolicy.MAX_VERTICAL_SCROLL_HEIGHT, Math.max(16,
+                (int) Math.floor(height * 64.0 / width + 0.5)));
+        if (scaledHeight <= 16)
+            return new Frame[] {fit(rgb, width, height, 64, 16, "contain")};
+        Frame tall = fit(rgb, width, height, 64, scaledHeight, "stretch");
+        int frameBytes = 64 * 16 * 3;
+        int lastOffset = scaledHeight - 16;
+        java.util.ArrayList<Frame> frames = new java.util.ArrayList<>();
+        for (int y = 0; y <= lastOffset; y += 16)
+            frames.add(new Frame(64, 16, java.util.Arrays.copyOfRange(
+                    tall.rgb, y * 64 * 3, y * 64 * 3 + frameBytes)));
+        if ((frames.size() - 1) * 16 != lastOffset)
+            frames.add(new Frame(64, 16, java.util.Arrays.copyOfRange(
+                    tall.rgb, lastOffset * 64 * 3, lastOffset * 64 * 3 + frameBytes)));
+        return frames.toArray(new Frame[0]);
     }
 
     private static void requireFrame(byte[] rgb, int width, int height) {

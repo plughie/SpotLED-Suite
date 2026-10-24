@@ -11,6 +11,13 @@ so firmware scrolling effects still work. The preview is the initial 64×16
 viewport. The app uses
 the same launcher artwork as Android.
 
+Pinch directly on the 64×16 image preview to zoom and drag to pan. The preview
+stays visible during reprocessing and updates to match the frame that will be
+sent; Reset crop returns to the centered fit. The optional still-image vertical loop fits the image to 64
+pixels wide, streams successive 16-row viewports at 250 ms with Scroll Up, and
+loops until **Cancel transfer**. Animated GIFs stay on their normal bounded
+animation path. This foreground mode holds BLE only while running.
+
 Animated GIFs are sampled to two frames to match Android and fit the observed
 full-color transfer budget. Preview and send use those same transformed frames
 at the same shared 250–1,000 ms interval. Input is capped at 50 MB and downsampled
@@ -24,8 +31,9 @@ work are intentionally Android-only.
 
 The About panel shows the app version/build number. Text and image previews are
 available before sending; native text preview is a static initial viewport, not
-firmware marquee simulation. The keyboard can be dismissed with Done or by
-scrolling. If Bluetooth access was denied, enable it under iOS Settings →
+firmware marquee simulation. The text preview updates live, and **Send text**
+immediately sends the current preview. The keyboard can be dismissed with Done
+or by scrolling. If Bluetooth access was denied, enable it under iOS Settings →
 Privacy & Security → Bluetooth.
 
 ## Build

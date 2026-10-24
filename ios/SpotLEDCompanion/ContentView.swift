@@ -40,7 +40,7 @@ private enum CompanionSheet: String, Identifiable {
 
 private enum PendingTransfer {
     case text(String, SpotLEDTextColor, SpotLEDEffect, TextPanelOrientation, Bool, UInt16)
-    case image([[UInt8]], UInt16)
+    case image([[UInt8]], UInt16, UInt8, Bool)
 }
 
 struct ContentView: View {
@@ -52,6 +52,10 @@ struct ContentView: View {
     @AppStorage("spotled.textEffect") private var effectName = SpotLEDEffect.scrollLeft.rawValue
     @AppStorage("spotled.rotation") private var rotation = 0
     @AppStorage("spotled.fit") private var fitName = ImageFit.contain.rawValue
+    @AppStorage("spotled.imageZoom") private var imageZoom = 1.0
+    @AppStorage("spotled.imagePanX") private var imagePanX = 0.0
+    @AppStorage("spotled.imagePanY") private var imagePanY = 0.0
+    @AppStorage("spotled.verticalImageScroll") private var verticalImageScroll = false
     @AppStorage("spotled.textOrientation") private var textOrientationName = TextPanelOrientation.landscape.rawValue
     @AppStorage("spotled.textSpeedMs") private var textSpeedMs = 200
     @AppStorage("spotled.appearance") private var appearanceName = "system"
@@ -63,7 +67,11 @@ struct ContentView: View {
     @State private var imagePreviews: [UIImage] = []
     @State private var imageIntervalMs: UInt16 = 500
     @State private var imageSourceFrameCount = 0
+    @State private var imageEffectMode: UInt8 = 0
+    @State private var imageVerticalScrollActive = false
     @State private var imageLoadError: String?
+    @State private var imageGestureMagnification = 1.0
+    @State private var imageGestureTranslation = CGSize.zero
     @State private var activeSheet: CompanionSheet?
     @State private var pendingTransfer: PendingTransfer?
     @State private var askToFindDisplay = false
@@ -111,6 +119,7 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { scrollProxy in
             Form {
                 Section("Display") {
                     Button(ble.isScanning ? "Scanning…" : "Find SpotLED displays") {
@@ -199,7 +208,10 @@ struct ContentView: View {
                             Text(option.rawValue).tag(option.rawValue)
                         }
                     }
-                    if let textPreview { previewSection(textPreview) }
+                    if let textPreview {
+                        previewSection(textPreview)
+                            .id("nativeTextPreview")
+                    }
                     Button("Send text") {
                         requestTextSend()
                     }
@@ -209,6 +221,35 @@ struct ContentView: View {
                 }
 
                 Section("Image") {
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Label(imageFrames.isEmpty ? "Choose image or GIF" : "Choose another image or GIF",
+                              systemImage: "photo")
+                    }
+                    if imagePreviews.count > 1 && !imageVerticalScrollActive {
+                        TimelineView(.periodic(from: .now, by: max(0.25, Double(imageIntervalMs) / 1000))) { timeline in
+                            let seconds = max(0.25, Double(imageIntervalMs) / 1000)
+                            let frameIndex = Int(timeline.date.timeIntervalSinceReferenceDate / seconds)
+                                % imagePreviews.count
+                            imagePreviewSection(imagePreviews[frameIndex])
+                        }
+                    } else if let imagePreview = imagePreviews.first {
+                        imagePreviewSection(imagePreview)
+                    } else {
+                        Text("Choose an image to preview, then pinch to zoom and drag to pan.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if let imageLoadError {
+                        Text(imageLoadError).font(.footnote).foregroundStyle(.red)
+                    }
+                    LabeledContent("Crop", value: String(format: "%.1f× · X %+.0f%% · Y %+.0f%%",
+                                                           imageZoom, imagePanX * 100, imagePanY * 100))
+                    if imageZoom != 1 || imagePanX != 0 || imagePanY != 0 {
+                        Button("Reset crop", systemImage: "arrow.uturn.backward") {
+                            imageZoom = 1
+                            imagePanX = 0
+                            imagePanY = 0
+                        }
+                    }
                     Picker("Rotation", selection: $rotation) {
                         ForEach([0, 90, 180, 270], id: \.self) { angle in
                             Text("\(angle)°").tag(angle)
@@ -219,32 +260,29 @@ struct ContentView: View {
                         ForEach(ImageFit.allCases) { mode in Text(mode.rawValue).tag(mode.rawValue) }
                     }
                     .accessibilityIdentifier("image.fit")
+                    .disabled(verticalImageScroll)
                     Text("Rotation and fit apply to images only.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    PhotosPicker(selection: $photoItem, matching: .images) {
-                        Label(imageFrames.isEmpty ? "Choose image or GIF" : "Choose another image or GIF",
-                              systemImage: "photo")
+                    Toggle("Vertical scroll loop (still images)", isOn: $verticalImageScroll)
+                        .accessibilityIdentifier("image.verticalScroll")
+                    if verticalImageScroll {
+                        Text("Stretches to 64 pixels wide and scrolls through 16-row viewports with a 250 ms Scroll Up transition. Animated GIFs are not supported in this mode.")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
-                    if imagePreviews.count > 1 {
-                        TimelineView(.periodic(from: .now, by: max(0.25, Double(imageIntervalMs) / 1000))) { timeline in
-                            let seconds = max(0.25, Double(imageIntervalMs) / 1000)
-                            let frameIndex = Int(timeline.date.timeIntervalSinceReferenceDate / seconds)
-                                % imagePreviews.count
-                            previewSection(imagePreviews[frameIndex])
-                        }
-                    } else if let imagePreview = imagePreviews.first {
-                        previewSection(imagePreview)
-                    }
-                    if let imageLoadError {
-                        Text(imageLoadError).font(.footnote).foregroundStyle(.red)
-                    }
-                    if imageFrames.count > 1 {
+                    if imageVerticalScrollActive {
+                        Text("Vertical loop uses \(imageFrames.count) viewports at 250 ms/step with Scroll Up.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else if verticalImageScroll && !imageFrames.isEmpty {
+                        Text("This image is not taller than the display, so scrolling is not needed.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else if imageFrames.count > 1 {
                         Text("Showing/sending \(imageFrames.count) of \(imageSourceFrameCount) source GIF frames at \(imageIntervalMs) ms/frame; samples span the animation and composite over black.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     Button("Send image or GIF") {
                         guard !imageFrames.isEmpty else { return }
-                        requestTransfer(.image(imageFrames, imageIntervalMs))
+                        requestTransfer(.image(imageFrames, imageIntervalMs,
+                                               imageEffectMode, imageVerticalScrollActive))
                     }
                     .accessibilityIdentifier("image.send")
                     .disabled(imageFrames.isEmpty || ble.isSending)
@@ -296,9 +334,28 @@ struct ContentView: View {
             }
             .onChange(of: rotation) { _, _ in reprocessSelectedPhoto() }
             .onChange(of: fitName) { _, _ in reprocessSelectedPhoto() }
+            .onChange(of: imageZoom) { _, _ in reprocessSelectedPhoto() }
+            .onChange(of: imagePanX) { _, _ in reprocessSelectedPhoto() }
+            .onChange(of: imagePanY) { _, _ in reprocessSelectedPhoto() }
+            .onChange(of: verticalImageScroll) { _, enabled in
+                if enabled {
+                    imageZoom = 1
+                    imagePanX = 0
+                    imagePanY = 0
+                }
+                reprocessSelectedPhoto()
+            }
             .onChange(of: photoItem) { _, item in loadPhoto(item) }
-            .onAppear { reprocessSelectedPhoto() }
+            .onAppear {
+                reprocessSelectedPhoto()
+                if ProcessInfo.processInfo.arguments.contains("-spotled.previewScreenshot") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        scrollProxy.scrollTo("nativeTextPreview", anchor: .center)
+                    }
+                }
+            }
             .onDisappear { cancelPhotoWork() }
+            }
         }
     }
 
@@ -325,6 +382,50 @@ struct ContentView: View {
                 .aspectRatio(preview.size.width / preview.size.height, contentMode: .fit)
                 .background(.black)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                .accessibilityIdentifier("text.preview")
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func imagePreviewSection(_ preview: UIImage) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("64×16 preview · pinch to zoom, drag to pan")
+                .font(.caption).foregroundStyle(.secondary)
+            GeometryReader { geometry in
+                Image(uiImage: preview)
+                    .resizable()
+                    .interpolation(.none)
+                    .aspectRatio(4, contentMode: .fit)
+                    .frame(width: geometry.size.width,
+                           height: min(geometry.size.height, geometry.size.width / 4))
+                    .scaleEffect(imageGestureMagnification)
+                    .offset(imageGestureTranslation)
+                    .clipped()
+                    .gesture(SimultaneousGesture(MagnificationGesture(), DragGesture(minimumDistance: 0))
+                        .onChanged { value in
+                            imageGestureMagnification = value.first ?? 1
+                            imageGestureTranslation = value.second?.translation ?? .zero
+                        }
+                        .onEnded { value in
+                            let previousZoom = imageZoom
+                            imageZoom = min(4, max(1, imageZoom * Double(value.first ?? 1)))
+                            let width = max(1, geometry.size.width)
+                            let height = max(1, min(geometry.size.height, geometry.size.width / 4))
+                            let translation = value.second?.translation ?? .zero
+                            imagePanX = min(1, max(-1, imagePanX
+                                - Double(translation.width / width) * 2 / max(previousZoom, 1)))
+                            imagePanY = min(1, max(-1, imagePanY
+                                - Double(translation.height / height) * 2 / max(previousZoom, 1)))
+                            imageGestureMagnification = 1
+                            imageGestureTranslation = .zero
+                        })
+                    .accessibilityLabel("Image crop preview")
+                    .accessibilityHint("Pinch to zoom and drag to pan")
+                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+            }
+            .frame(height: 96)
+            .background(.black)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .padding(.vertical, 4)
     }
@@ -335,12 +436,19 @@ struct ContentView: View {
         let generation = UUID()
         photoProcessingID = generation
         imageFrames = []
-        imagePreviews = []
         imageSourceFrameCount = 0
+        imageEffectMode = 0
+        imageVerticalScrollActive = false
         let selectedRotation = rotation
         let selectedFit = fit
+        let selectedZoom = imageZoom
+        let selectedPanX = imagePanX
+        let selectedPanY = imagePanY
+        let selectedVerticalScroll = verticalImageScroll
         let decodingTask = Task.detached(priority: .userInitiated) {
-            try RGBRasterizer.imageFrames(data, rotation: selectedRotation, fit: selectedFit)
+            try RGBRasterizer.imageFrames(data, rotation: selectedRotation, fit: selectedFit,
+                                          zoom: selectedZoom, panX: selectedPanX, panY: selectedPanY,
+                                          verticalScroll: selectedVerticalScroll)
         }
         photoTasks.replace(.decoding) { decodingTask.cancel() }
         Task {
@@ -350,7 +458,11 @@ struct ContentView: View {
                 imageFrames = result.frames.map(\.bytes)
                 imageIntervalMs = result.intervalMs
                 imageSourceFrameCount = result.originalFrameCount
-                imagePreviews = result.frames.compactMap(RGBRasterizer.previewImage)
+                imageEffectMode = result.effectMode
+                imageVerticalScrollActive = result.verticalScroll
+                        let previewFrames = result.verticalScroll
+                            ? Array(result.frames.prefix(1)) : result.frames
+                        imagePreviews = previewFrames.compactMap(RGBRasterizer.previewImage)
                 imageLoadError = imagePreviews.isEmpty
                     ? "Could not prepare the image preview. Choose a different file."
                     : nil
@@ -361,6 +473,8 @@ struct ContentView: View {
                 imageFrames = []
                 imagePreviews = []
                 imageSourceFrameCount = 0
+                imageEffectMode = 0
+                imageVerticalScrollActive = false
                 imageLoadError = "Could not decode selected image: \(error.localizedDescription)"
             }
         }
@@ -408,8 +522,15 @@ struct ContentView: View {
                                    fit: .contain, rasterRequested: rasterRequested,
                                    intervalMs: intervalMs)
             }
-        case let .image(frames, intervalMs):
-            Task { await ble.sendImageFrames(frames, intervalMs: intervalMs) }
+        case let .image(frames, intervalMs, effectMode, verticalScroll):
+            Task {
+                if verticalScroll {
+                    await ble.sendVerticalScrollFrames(frames, intervalMs: intervalMs)
+                } else {
+                    await ble.sendImageFrames(frames, intervalMs: intervalMs,
+                                              effectMode: effectMode)
+                }
+            }
         }
     }
 
@@ -422,7 +543,6 @@ struct ContentView: View {
         imageLoadError = nil
         selectedPhotoData = nil
         imageFrames = []
-        imagePreviews = []
         let generation = UUID()
         photoProcessingID = generation
         let loadingTask = Task {

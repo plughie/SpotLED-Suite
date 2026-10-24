@@ -475,12 +475,13 @@ def rotate_rgb_pixels(width, height, pixels, degrees):
     return out_width, out_height, bytes(output)
 
 def fit_rgb_pixels(width, height, pixels, target_width=64, target_height=16,
-                   fit="contain", background=(0, 0, 0)):
-    """Fit row-major RGB pixels using area averaging and center placement.
+                   fit="contain", background=(0, 0, 0), zoom=1.0,
+                   pan_x=0.0, pan_y=0.0):
+    """Fit row-major RGB pixels using area averaging and a movable viewport.
 
     ``contain`` preserves the whole image and pads with the background color;
-    ``cover`` preserves aspect ratio and center-crops; ``stretch`` fills the
-    canvas without preserving aspect ratio.
+    ``cover`` preserves aspect ratio and crops; ``stretch`` fills the canvas
+    without preserving aspect ratio. Zoom is 1–8×; pan coordinates are -1..1.
     """
     if min(width, height, target_width, target_height) <= 0:
         raise ValueError("source and target dimensions must be positive")
@@ -491,6 +492,10 @@ def fit_rgb_pixels(width, height, pixels, target_width=64, target_height=16,
         raise ValueError("background must be an RGB triple")
     if fit not in ("contain", "cover", "stretch"):
         raise ValueError("fit must be 'contain', 'cover', or 'stretch'")
+    if not 1.0 <= float(zoom) <= 4.0:
+        raise ValueError("zoom must be from 1× through 4×")
+    if not -1.0 <= float(pan_x) <= 1.0 or not -1.0 <= float(pan_y) <= 1.0:
+        raise ValueError("pan_x and pan_y must be from -1 through 1")
 
     if fit == "stretch":
         scaled_width, scaled_height = target_width, target_height
@@ -507,6 +512,8 @@ def fit_rgb_pixels(width, height, pixels, target_width=64, target_height=16,
             scaled_width = max(target_width, scaled_width)
             scaled_height = max(target_height, scaled_height)
 
+    scaled_width = max(1, int(floor(scaled_width * float(zoom) + 0.5)))
+    scaled_height = max(1, int(floor(scaled_height * float(zoom) + 0.5)))
     scaled = bytearray(scaled_width * scaled_height * 3)
     for y in range(scaled_height):
         y0 = y * height / scaled_height
@@ -532,24 +539,22 @@ def fit_rgb_pixels(width, height, pixels, target_width=64, target_height=16,
                 )
 
     output = bytearray(bytes(background) * (target_width * target_height))
-    if fit == "cover":
-        crop_x = (scaled_width - target_width) // 2
-        crop_y = (scaled_height - target_height) // 2
-        for y in range(target_height):
-            source = ((y + crop_y) * scaled_width + crop_x) * 3
-            destination = y * target_width * 3
-            output[destination:destination + target_width * 3] = scaled[source:source + target_width * 3]
-    else:
-        offset_x = (target_width - scaled_width) // 2
-        offset_y = (target_height - scaled_height) // 2
-        for y in range(scaled_height):
-            source = y * scaled_width * 3
-            destination = ((y + offset_y) * target_width + offset_x) * 3
-            output[destination:destination + scaled_width * 3] = scaled[source:source + scaled_width * 3]
+    offset_x = int(floor((target_width - scaled_width) * (float(pan_x) + 1) / 2 + 0.5))
+    offset_y = int(floor((target_height - scaled_height) * (float(pan_y) + 1) / 2 + 0.5))
+    for y in range(target_height):
+        source_y = y - offset_y
+        if source_y < 0 or source_y >= scaled_height: continue
+        for x in range(target_width):
+            source_x = x - offset_x
+            if source_x < 0 or source_x >= scaled_width: continue
+            source = (source_y * scaled_width + source_x) * 3
+            destination = (y * target_width + x) * 3
+            output[destination:destination + 3] = scaled[source:source + 3]
     return target_width, target_height, bytes(output)
 
 def load_image_pixels(path, rotation=0, fit="contain", target_width=64,
-                      target_height=16, background=(0, 0, 0)):
+                      target_height=16, background=(0, 0, 0), zoom=1.0,
+                      pan_x=0.0, pan_y=0.0):
     """Load the first frame of an image, rotate it, and fit it to the display."""
     try:
         from PIL import Image, ImageOps
@@ -567,7 +572,8 @@ def load_image_pixels(path, rotation=0, fit="contain", target_width=64,
         rgb = image.tobytes()
     width, height, rgb = rotate_rgb_pixels(width, height, rgb, rotation)
     return fit_rgb_pixels(width, height, rgb, target_width, target_height,
-                          fit=fit, background=background)
+                          fit=fit, background=background, zoom=zoom,
+                          pan_x=pan_x, pan_y=pan_y)
 
 def select_frame_indices(frame_count, limit):
     """Evenly sample a sequence, retaining its first and last frames."""
@@ -602,8 +608,46 @@ def image_animation_metadata(path):
             total_ms += max(20, delay)
         return count, total_ms
 
+def load_vertical_scroll_frames(path, rotation=0, target_width=64, target_height=16,
+                               max_source_height=4096, background=(0, 0, 0),
+                               frame_step=16):
+    """Create adjacent viewport keyframes for a bounded Scroll Up loop."""
+    try:
+        from PIL import Image, ImageOps
+    except ImportError as exc:
+        raise RuntimeError("Image input requires Pillow; install the project dependencies.") from exc
+
+    with Image.open(path) as source:
+        if getattr(source, "n_frames", 1) > 1:
+            raise ValueError("Vertical scroll mode currently supports still images, not animated GIFs")
+        image = ImageOps.exif_transpose(source).convert("RGBA")
+        matte = Image.new("RGBA", image.size, tuple(background) + (255,))
+        image = Image.alpha_composite(matte, image).convert("RGB")
+        width, height, pixels = rotate_rgb_pixels(image.width, image.height,
+                                                  image.tobytes(), rotation)
+    scaled_height = int(floor(height * target_width / width + 0.5))
+    if scaled_height <= target_height:
+        fitted = fit_rgb_pixels(width, height, pixels, target_width, target_height,
+                                fit="contain", background=background)
+        return [(fitted[2], 500)]
+    scaled_height = min(max_source_height, scaled_height)
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    tall = Image.frombytes("RGB", (width, height), pixels).resize(
+        (target_width, scaled_height), resample=resampling
+    )
+    tall_pixels = tall.tobytes()
+    frame_bytes = target_width * target_height * 3
+    row_bytes = target_width * 3
+    last_offset = scaled_height - target_height
+    offsets = list(range(0, last_offset + 1, max(1, frame_step)))
+    if offsets[-1] != last_offset:
+        offsets.append(last_offset)
+    return [(tall_pixels[offset * row_bytes:offset * row_bytes + frame_bytes], 250)
+            for offset in offsets]
+
 def load_image_frames(path, rotation=0, fit="contain", target_width=64,
-                      target_height=16, background=(0, 0, 0), max_frames=20):
+                      target_height=16, background=(0, 0, 0), max_frames=20,
+                      zoom=1.0, pan_x=0.0, pan_y=0.0):
     """Load and transform up to max_frames, returning RGB frames and GIF delays."""
     try:
         from PIL import Image, ImageOps
@@ -628,13 +672,14 @@ def load_image_frames(path, rotation=0, fit="contain", target_width=64,
             )
             width, height, pixels = fit_rgb_pixels(
                 width, height, pixels, target_width, target_height,
-                fit=fit, background=background
+                fit=fit, background=background, zoom=zoom,
+                pan_x=pan_x, pan_y=pan_y
             )
             output.append((pixels, max(1, delay_ms)))
     return output
 
 def build_animation_transfer(frames, max_frames, receive_capacity, width=64, height=16,
-                             total_duration_ms=None):
+                             total_duration_ms=None, effect_mode=0):
     """Preserve as many evenly sampled animation frames as the device accepts.
 
     The protocol supplies one shared TimeObject for a FrameAnimationObject,
@@ -654,7 +699,7 @@ def build_animation_transfer(frames, max_frames, receive_capacity, width=64, hei
         duration = total_duration_ms if total_duration_ms is not None else sum(delays)
         interval = animation_interval_ms(duration, frame_count)
         frame_objects = [build_rgb_frame(width, height, pixels) for pixels, _ in selected]
-        animation = build_frame_animation(frame_objects, frame_time_ms=interval, mode=0)
+        animation = build_frame_animation(frame_objects, frame_time_ms=interval, mode=effect_mode)
         payload = wrap_set_data(animation)
         if frame_count == 1:
             single_frame_size = len(payload)
@@ -1075,14 +1120,17 @@ async def send_set_acknowledged(client, cmd_type, payload):
         await client.stop_notify(CMD)
 
 async def send_image(path, rotation=0, fit='contain', preview_path=None,
-                     device_name=DEVICE_NAME):
+                     device_name=DEVICE_NAME, zoom=1.0, pan_x=0.0, pan_y=0.0,
+                     vertical_scroll=False):
+    if vertical_scroll:
+        return await send_vertical_scroll(path, rotation, preview_path, device_name)
     async with connected_device(device_name) as client:
         screen, capabilities, receive_capacity = await query_image_capabilities(client)
         width, height = screen["width"], screen["height"]
         original_frame_count, source_duration_ms = image_animation_metadata(path)
         frames = load_image_frames(
             path, rotation=rotation, fit=fit, target_width=width, target_height=height,
-            max_frames=capabilities["max_frames"]
+            max_frames=capabilities["max_frames"], zoom=zoom, pan_x=pan_x, pan_y=pan_y
         )
         if preview_path:
             save_rgb_preview(preview_path, width, height, frames[0][0])
@@ -1099,9 +1147,99 @@ async def send_image(path, rotation=0, fit='contain', preview_path=None,
         await send_set_acknowledged(client, 0x8004, payload)
     print(
         f"Image transfer acknowledged ({width}x{height}, color=0x{screen['color_type']:02X}, "
-        f"rotation={rotation}, fit={fit}, frames={frames_sent}/{original_frame_count}, "
-        f"interval={frame_interval}ms)."
+        f"rotation={rotation}, fit={fit}, zoom={zoom:.2f}, pan=({pan_x:.2f},{pan_y:.2f}), "
+        f"frames={frames_sent}/{original_frame_count}, interval={frame_interval}ms)."
     )
+
+async def send_vertical_scroll(path, rotation=0, preview_path=None,
+                               device_name=DEVICE_NAME, interval_ms=250):
+    """Stream one-row image viewports, using the firmware Scroll Up transition."""
+    async with connected_device(device_name) as client:
+        screen, capabilities, receive_capacity = await query_image_capabilities(client)
+        if screen["color_type"] != 0xff:
+            raise RuntimeError(f"Vertical scroll needs RGB color type 0xFF; display reports 0x{screen['color_type']:02X}")
+        if capabilities["max_frames"] < 1:
+            raise RuntimeError("Display reports no frame-animation capacity.")
+        frames = load_vertical_scroll_frames(path, rotation, screen["width"], screen["height"])
+        if preview_path:
+            save_rgb_preview(preview_path, screen["width"], screen["height"], frames[0][0])
+            print(f"Preview saved: {preview_path}")
+        if len(frames) == 1:
+            frame = build_rgb_frame(screen["width"], screen["height"], frames[0][0])
+            payload = wrap_set_data(build_frame_animation([frame], frame_time_ms=500, mode=0))
+            if len(payload) > receive_capacity:
+                raise RuntimeError(f"Image exceeds device receive capacity ({receive_capacity} bytes)")
+            await send_set_acknowledged(client, 0x8004, payload)
+            print("Vertical scrolling is not needed; image fits within the display height.")
+            return
+
+        frame = build_rgb_frame(screen["width"], screen["height"], frames[0][0])
+        first_payload = wrap_set_data(build_frame_animation(
+            [frame], frame_time_ms=interval_ms, mode=text_effect_mode("up")))
+        if len(first_payload) > receive_capacity:
+            raise RuntimeError(f"A scroll frame exceeds device receive capacity ({receive_capacity} bytes)")
+        if len(first_payload) > capabilities.get("storage_bytes", len(first_payload)):
+            raise RuntimeError("A scroll frame exceeds the device storage limit")
+
+        print(f"Vertical image scroll running ({len(frames)} viewport positions, "
+              f"{interval_ms} ms/position). Press Ctrl-C to stop.")
+        loop = asyncio.get_running_loop()
+        while True:
+            for pixels, _ in frames:
+                started = loop.time()
+                frame = build_rgb_frame(screen["width"], screen["height"], pixels)
+                payload = wrap_set_data(build_frame_animation(
+                    [frame], frame_time_ms=interval_ms, mode=text_effect_mode("up")))
+                await send_set_acknowledged(client, 0x8004, payload)
+                remaining = interval_ms / 1000 - (loop.time() - started)
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+
+async def send_vertical_scroll(path, rotation=0, preview_path=None,
+                               device_name=DEVICE_NAME, frame_step=16,
+                               interval_ms=250):
+    """Stream bounded viewport frames while connected to create a looping tall-image scroll."""
+    async with connected_device(device_name) as client:
+        screen, capabilities, receive_capacity = await query_image_capabilities(client)
+        width, height = screen["width"], screen["height"]
+        if screen["color_type"] != 0xff:
+            raise RuntimeError(f"Vertical scroll needs RGB color type 0xFF; display reports 0x{screen['color_type']:02X}")
+        if capabilities["max_frames"] < 1:
+            raise RuntimeError("Display reports no frame-animation capacity.")
+        frames = load_vertical_scroll_frames(path, rotation, width, height,
+                                             frame_step=frame_step)
+        if preview_path:
+            save_rgb_preview(preview_path, width, height, frames[0][0])
+            print(f"Preview saved: {preview_path}")
+        if len(frames) == 1:
+            frame = build_rgb_frame(width, height, frames[0][0])
+            payload = wrap_set_data(build_frame_animation([frame], frame_time_ms=500, mode=0))
+            if len(payload) > receive_capacity:
+                raise RuntimeError(f"Image exceeds device receive capacity ({receive_capacity} bytes)")
+            await send_set_acknowledged(client, 0x8004, payload)
+            print("Vertical scroll not needed; image fits within the display height.")
+            return
+        first_frame = wrap_set_data(build_frame_animation(
+            [build_rgb_frame(width, height, frames[0][0])],
+            frame_time_ms=interval_ms, mode=text_effect_mode("up")))
+        if len(first_frame) > receive_capacity:
+            raise RuntimeError(f"A scroll frame exceeds device receive capacity ({receive_capacity} bytes)")
+        if len(first_frame) > capabilities.get("storage_bytes", len(first_frame)):
+            raise RuntimeError("A scroll frame exceeds the device storage limit")
+
+        print(f"Vertical image scroll running ({len(frames)} positions; "
+              f"{interval_ms} ms/position). Press Ctrl-C to stop.")
+        loop = asyncio.get_running_loop()
+        while True:
+            for pixels, _ in frames:
+                started = loop.time()
+                frame = build_rgb_frame(width, height, pixels)
+                payload = wrap_set_data(build_frame_animation(
+                    [frame], frame_time_ms=interval_ms, mode=text_effect_mode("up")))
+                await send_set_acknowledged(client, 0x8004, payload)
+                remaining = interval_ms / 1000 - (loop.time() - started)
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
 
 async def send_rgb_frame(pixels, width=64, height=16, device_name=DEVICE_NAME,
                          frame_time_ms=1000):
@@ -1313,6 +1451,14 @@ def parse_cli_args():
                         help="text orientation; portrait rotates native 16x16 glyphs and preserves scrolling")
     parser.add_argument("--fit", choices=("contain", "cover", "stretch"), default="contain",
                         help="contain preserves all content with padding; cover crops; stretch distorts")
+    parser.add_argument("--zoom", type=float, default=1.0,
+                        help="image viewport zoom from 1× to 4× (default: 1×)")
+    parser.add_argument("--pan-x", type=float, default=0.0,
+                        help="horizontal viewport position from -1 (left) to 1 (right)")
+    parser.add_argument("--pan-y", type=float, default=0.0,
+                        help="vertical viewport position from -1 (top) to 1 (bottom)")
+    parser.add_argument("--vertical-scroll", action="store_true",
+                        help="loop a still image through top/bottom 16-row viewports using Scroll Up")
     parser.add_argument("--preview", help="optional path for a PNG of the exact 64x16 frame to send")
     parser.add_argument("--raster-font", choices=("3x5", "panel16"), default=None,
                         help="explicitly use geometric text: compact 3x5 or captured 16x16 glyphs")
@@ -1339,6 +1485,16 @@ def parse_cli_args():
             parser.error("provide text or --image")
         if args.rotation != 0:
             parser.error("--rotation is image-only; use --text-orientation landscape or portrait for text")
+        if args.zoom != 1.0 or args.pan_x != 0.0 or args.pan_y != 0.0 or args.vertical_scroll:
+            parser.error("--zoom, --pan-x, --pan-y, and --vertical-scroll require --image")
+    if not 1.0 <= args.zoom <= 4.0:
+        parser.error("--zoom must be from 1× through 4×")
+    if not -1.0 <= args.pan_x <= 1.0 or not -1.0 <= args.pan_y <= 1.0:
+        parser.error("--pan-x and --pan-y must be from -1 through 1")
+    if args.vertical_scroll and (args.zoom != 1.0 or args.pan_x != 0.0 or args.pan_y != 0.0):
+        parser.error("--vertical-scroll is a dedicated viewport mode and cannot combine with pan/zoom")
+    if args.vertical_scroll and args.fit != "contain":
+        parser.error("--fit is not used with --vertical-scroll")
     return args
 
 
@@ -1361,16 +1517,35 @@ def dry_run(args):
     if args.image:
         info = inspect_image_file(args.image)
         original_frame_count, source_duration_ms = image_animation_metadata(args.image)
-        frames = load_image_frames(args.image, args.rotation, args.fit,
-                                   max_frames=min(2, info["frames"]))
-        payload, sent_count, interval = build_animation_transfer(
-            frames, max_frames=2, receive_capacity=assumed_limit,
-            total_duration_ms=source_duration_ms)
+        if args.vertical_scroll:
+            if info["frames"] > 1:
+                raise ValueError("Vertical scroll mode currently supports still images, not animated GIFs")
+            frames = load_vertical_scroll_frames(args.image, args.rotation)
+            scroll_active = len(frames) > 1
+            interval = 250 if scroll_active else 500
+            frame = build_rgb_frame(64, 16, frames[0][0])
+            payload = wrap_set_data(build_frame_animation(
+                [frame], frame_time_ms=interval,
+                mode=text_effect_mode("up") if scroll_active else 0))
+            sent_count = len(frames)
+        else:
+            scroll_active = False
+            frames = load_image_frames(args.image, args.rotation, args.fit,
+                                       max_frames=min(2, info["frames"]), zoom=args.zoom,
+                                       pan_x=args.pan_x, pan_y=args.pan_y)
+            payload, sent_count, interval = build_animation_transfer(
+                frames, max_frames=2, receive_capacity=assumed_limit,
+                total_duration_ms=source_duration_ms)
+        if len(payload) > assumed_limit:
+            raise ValueError(f"Image packet ({len(payload)} bytes) exceeds receive limit {assumed_limit}")
         if args.preview:
             save_rgb_preview(args.preview, 64, 16, frames[0][0])
         sampled_text = f"frames {original_frame_count} → {sent_count}"
+        mode_summary = (f"vertical scroll loop ({sent_count} viewports)" if scroll_active else
+                        "vertical scroll not needed" if args.vertical_scroll else
+                        f"zoom={args.zoom:.2f}, pan=({args.pan_x:.2f},{args.pan_y:.2f})")
         print(f"Offline dry run: {args.image} ({info['width']}×{info['height']}, {info['format']}); "
-              f"{sampled_text}; rotation={args.rotation}°, fit={args.fit}; "
+              f"{sampled_text}; rotation={args.rotation}°, fit={args.fit}, {mode_summary}; "
               f"interval={interval} ms; packet={len(payload)}/{assumed_limit} bytes; no BLE connection.")
         if args.preview: print(f"Preview saved: {args.preview}")
         return
@@ -1436,7 +1611,8 @@ def cli():
             asyncio.run(print_visible_pixel_map(args.device_name))
         elif args.image:
             asyncio.run(send_image(
-                args.image, args.rotation, args.fit, args.preview, args.device_name
+                args.image, args.rotation, args.fit, args.preview, args.device_name,
+                args.zoom, args.pan_x, args.pan_y, args.vertical_scroll
             ))
         else:
             text = args.text

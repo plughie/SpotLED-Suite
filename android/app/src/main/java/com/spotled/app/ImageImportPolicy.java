@@ -4,6 +4,7 @@ package com.spotled.app;
 final class ImageImportPolicy {
     static final long MAX_ENCODED_BYTES = 50L * 1024 * 1024;
     static final long MAX_DECODED_PIXELS = 4_000_000L;
+    static final int MAX_VERTICAL_SCROLL_HEIGHT = 4096;
 
     private ImageImportPolicy() {}
 

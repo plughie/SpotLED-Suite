@@ -45,6 +45,11 @@ No open P0 items.
 - [x] Document the Android signing-key migration path and backup safeguards.
 - [x] Track authorized Wetter.ax GIF source assets and make Android APK asset
   copying reproducible from that canonical set.
+- [x] Add 1–4× zoom and normalized pan controls on Android/iOS plus matching
+  Python transforms; preview and send use the same 64×16 crop.
+- [x] Add a bounded still-image vertical loop that streams adjacent 16-row views
+  with Scroll Up at 250 ms/step and supports cancellation. Animated GIFs remain
+  on the existing bounded animation path.
 
 ## Pending owner action
 
@@ -87,6 +92,16 @@ No open P0 items.
 - [ ] Complete only the still-unconfirmed Android effects/palette cases and,
   if used, MQTT raster-mode comparison.
 - [ ] Review iOS Dynamic Type, VoiceOver and Bluetooth-denied behavior.
+- [ ] Verify g/j/p/q/y descenders in the Android preview and on the physical
+  display; the latest actual iPhone screenshot shows qgyj reaching row 15, which
+  the user thinks will work. Hardware rendering remains untested.
+- [x] Capture a separate temporary `gUq` preview for comparison without
+  changing the saved `gUg` text; the `q` descender is visible in that screenshot.
+- [ ] Validate pinch/drag crop behavior and transformed preview/send parity on
+  Android and iOS, plus the equivalent Python viewport flags.
+- [ ] Have the colleague validate full vertical scrolling and loop wrap on a
+  tall still image from the Android APK; confirm Stop cancels cleanly without
+  rapid flashing. Validate iOS/Python scrolling on hardware if used.
 
 ## Blocked protocol research
 
@@ -102,7 +117,7 @@ No open P0 items.
 - [ ] Add user-defined schedules, text-file playlists and log following to
   Python/Android.
 - [ ] Add weather/MQTT/network status pixels with alert-composition rules.
-- [ ] Add crop/viewport controls, two-line text and modular screen partitions.
+- [ ] Add two-line text and modular screen partitions.
 - [ ] Add an authenticated HTTPS control endpoint.
 - [ ] Add optional NOAA station discovery by ZIP/postal code.
 - [ ] Decide how to handle unsupported AWTRIX icon/sound requests.

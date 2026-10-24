@@ -55,6 +55,8 @@ final class SpotLedBleClient {
     private final AtomicInteger nextSerial = new AtomicInteger(1);
     private final java.util.concurrent.atomic.AtomicBoolean transferInProgress =
             new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final java.util.concurrent.atomic.AtomicBoolean cancelVerticalScroll =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
     private volatile BluetoothGatt gatt;
     private volatile BluetoothGattCharacteristic commandCharacteristic;
     private volatile BluetoothGattCharacteristic dataCharacteristic;
@@ -326,6 +328,74 @@ final class SpotLedBleClient {
 
     void sendRgbAnimation(byte[][] frames, int width, int height, int intervalMs) {
         sendRgbAnimation(frames, width, height, intervalMs, 0, true);
+    }
+
+    void sendRgbAnimation(byte[][] frames, int width, int height, int intervalMs, int effectMode) {
+        sendRgbAnimation(frames, width, height, intervalMs, effectMode, false);
+    }
+
+    void cancelVerticalScroll() {
+        if (transferInProgress.get()) {
+            cancelVerticalScroll.set(true);
+            status("Stopping vertical image scroll…");
+        }
+    }
+
+    void sendVerticalScroll(byte[][] frames, int width, int height, int intervalMs,
+                            int effectMode) {
+        FoundDevice target = selectedDevice;
+        if (target == null) {
+            status("Find and select a SpotLED display before sending.");
+            return;
+        }
+        if (frames == null || frames.length < 2 || intervalMs < 100 || intervalMs > 2000) {
+            status("Vertical scroll needs at least two frames and a safe interval.");
+            return;
+        }
+        if (!transferInProgress.compareAndSet(false, true)) {
+            status("A transfer is already in progress.");
+            return;
+        }
+        cancelVerticalScroll.set(false);
+        lastTransferAcknowledged = false;
+        new Thread(() -> {
+            boolean started = false;
+            boolean transferAcknowledged = false;
+            try {
+                byte[] preflight = SpotLedProtocol.buildRgbAnimation(
+                        new byte[][] {frames[0]}, width, height, intervalMs, effectMode);
+                connectForTransfer(target);
+                SpotLedProtocol.Capabilities capabilities = queryCapabilities();
+                SpotLedProtocol.validateRgb(capabilities, width, height, 1, preflight.length);
+                started = true;
+                status("Vertical image scroll running. Keep this screen open or tap Stop.");
+                do {
+                    for (byte[] frame : frames) {
+                        if (cancelVerticalScroll.get()) break;
+                        long frameStart = SystemClock.elapsedRealtime();
+                        byte[] payload = SpotLedProtocol.buildRgbAnimation(
+                                new byte[][] {frame}, width, height, intervalMs, effectMode);
+                        transferPayload(payload);
+                        long remaining = intervalMs - (SystemClock.elapsedRealtime() - frameStart);
+                        if (remaining > 0) Thread.sleep(remaining);
+                        if (cancelVerticalScroll.get()) break;
+                    }
+                } while (!cancelVerticalScroll.get());
+                transferAcknowledged = true;
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                if (!cancelVerticalScroll.get()) status("Vertical scroll interrupted.");
+            } catch (Exception exception) {
+                status("Vertical scroll failed: " + (exception.getMessage() == null
+                        ? exception : exception.getMessage()));
+            } finally {
+                lastTransferAcknowledged = transferAcknowledged;
+                disconnectTransport();
+                transferInProgress.set(false);
+                cancelVerticalScroll.set(false);
+                if (started) status("Vertical image scroll stopped; disconnected.");
+            }
+        }, "spotled-vertical-image-scroll").start();
     }
 
     void sendNativeText(String text, int paletteIndex, int effectMode, int timeMs) {
